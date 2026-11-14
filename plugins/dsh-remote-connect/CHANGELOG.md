@@ -2,6 +2,21 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.38 — 2026-11-15
+
+### 修复
+
+- **带查询串的请求签名一直对不上**：客户端签名时把 `/progress?syncId=…` 整段算进去，服务端却只算 `url.pathname` —— 于是每一次进度轮询都是 401 `BAD_SIGNATURE`，而调用方把错误吞了（进度是 best-effort），现场表现成「进度条一直不动」，看起来像对端没在传。现在签名与验签都走 `host/sign.mjs` 的 `signatureBase()`，查询串算在内；`subscribe` 与 `/progress` 这类带参数的请求才真正可用。
+- **`/health` 报的版本号一直是 1.0.0**：`host/util.mjs` 的 `VERSION` 常量长期没跟着 `package.json` 走，装的人分不清自己跑的是哪一版。现在同步到当前版本，并且 `docs-guard` 会比对这两个值，发版忘了改就直接红。
+- **`x-dl-stream` 改成只认 `'1'`**：以前只要这个头存在（哪怕值是 `"0"`）就按「流式」签名；现在客户端与服务端口径一致。
+- **签名头长度设上限**：`x-dl-nonce` / `x-dl-mac` 超过 128 字符直接拒。nonce 会进重放表，一个超大 nonce 就是一个能撑内存的把手。
+
+### 新增
+
+- `host/sign.mjs`：`signatureBase()` / `signRequest()` / `bodyDigest()`，签名与验签共用同一个函数拼字符串。
+- `test/signature.mjs` 9 项：带查询串一致、老写法不一致（把这个错法记进断言）、改查询串即失效、无查询串对照组、方法/时间戳/nonce 各自影响签名、拼接格式稳定。
+- `test/e2e.mjs` 加一条：连上之后直接请求 `/progress?syncId=e2e-none`，必须走到 `SYNC_UNKNOWN` 而不是 `BAD_SIGNATURE` —— 这是那个 bug 的现场复现。
+
 ## 1.0.37 — 2026-11-15
 
 ### 修复

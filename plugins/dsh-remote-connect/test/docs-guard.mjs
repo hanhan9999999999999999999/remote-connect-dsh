@@ -72,6 +72,12 @@ const pkg = JSON.parse(read('package.json'))
 const version = read('CHANGELOG.md').match(/^##\s+([0-9]+\.[0-9]+\.[0-9]+)/m)?.[1]
 assert.equal(version, pkg.version, `CHANGELOG 顶部版本 ${version} 与 package.json ${pkg.version} 不一致`)
 
+// /health 报的版本号来自 host/util.mjs 的 VERSION 常量，发版时最容易忘。
+// 以前它一直停在 1.0.0，对外说「我是 1.0.0」，装的人根本分不清自己跑的是哪版。
+const utilVersion = read('host/util.mjs').match(/export const VERSION = '([^']+)'/)?.[1]
+assert.ok(utilVersion, 'host/util.mjs 里应当有 export const VERSION')
+assert.equal(utilVersion, pkg.version, `host/util.mjs 的 VERSION（${utilVersion}）与 package.json（${pkg.version}）不一致`)
+
 /* 3. locale 文件的中英键完全一致 -------------------------------------
  * 界面上的 153 条文案在 client.js 里，由 client-smoke 逐条对齐；
  * 这里只管 locale/{zh,en}.json 这两份插件名片。 */

@@ -8,7 +8,6 @@ import {
   VERSION,
   AppError,
   rid,
-  sha256,
 } from './util.mjs'
 import {
   decryptJson,
@@ -16,11 +15,11 @@ import {
   deriveSessionKey,
   encryptJson,
   handshakeProof,
-  hmacHex,
   randomNonce,
   safeEqualBuf,
   sessionReadyProof,
 } from './crypto.mjs'
+import { bodyDigest, signRequest } from './sign.mjs'
 import { FrameEncoderTransform, decodeFrames } from './frames.mjs'
 import { packStream } from './pack.mjs'
 
@@ -119,8 +118,10 @@ export class RemotePeer {
     if (!this.session) throw new AppError('NOT_CONNECTED', '尚未连接对端')
     const ts = Date.now()
     const nonce = rid(12)
-    const bodySha = extra['x-dl-stream'] ? 'stream' : sha256(bodyBuf ?? Buffer.alloc(0))
-    const mac = hmacHex(this.session.sk, `${method}|${BASE}${path}|${ts}|${nonce}|${bodySha}`)
+    const digest = bodyDigest(bodyBuf, extra['x-dl-stream'] === '1')
+    // 目标包含查询串：服务和客户两边都走 signatureBase 这一个函数拼字符串
+    const target = `${BASE}${path}`
+    const mac = signRequest(this.session.sk, { method, target, ts, nonce, digest })
     return {
       ...extra,
       'x-dl-token': this.session.token,

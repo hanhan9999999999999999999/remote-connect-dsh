@@ -175,6 +175,20 @@ try {
   assert.ok(connected.session?.token, 'connect must return a session token')
   console.log(`PASS handshake · session expires ${new Date(connected.session.expiresAt).toISOString()}`)
 
+  // 带查询串的请求：签名必须把 `?syncId=…` 算进去。
+  // 以前服务端只签 pathname，这类请求一律 401 BAD_SIGNATURE，而进度轮询把错误吞了，
+  // 现场表现成「进度条不动」。这里直接要一个不存在的同步任务：能走到「没有这个任务」
+  // 就说明签名这一关过了。
+  let progressCode = ''
+  try {
+    await peerA.requestJson('GET', '/progress?syncId=e2e-none', { timeoutMs: 5000 })
+  } catch (err) {
+    progressCode = err.code
+  }
+  assert.notEqual(progressCode, 'BAD_SIGNATURE', '带查询串的请求不该被判成签名不合法')
+  assert.equal(progressCode, 'SYNC_UNKNOWN')
+  console.log(`PASS signed query · /progress?syncId=… → ${progressCode}`)
+
   // A fresh peer restores the stored token instead of asking for the password.
   const restored = new RemotePeer({ record: { ...peerA.record }, logger, device })
   assert.equal(await restored.restore(), true)

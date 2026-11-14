@@ -28,6 +28,7 @@ const suites = [
   'push-guard.mjs',
   'frames.mjs',
   'crypto-guard.mjs',
+  'signature.mjs',
   'peer-streams.mjs',
   'config.mjs',
   'sync-cancel.mjs',

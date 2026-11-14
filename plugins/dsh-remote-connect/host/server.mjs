@@ -29,6 +29,7 @@ import { Discovery } from './discovery.mjs'
 import { FrameEncoderTransform, decodeFrames } from './frames.mjs'
 import { listProfiles } from './inventory.mjs'
 import { CLOCK_SKEW_MS, FailureTracker, NONCE_WINDOW_MS, clientIp, sanitizeDevice } from './guard.mjs'
+import { signatureBase } from './sign.mjs'
 
 const BASE = '/dsh-link/v1'
 const MAX_JSON = 4 * 1024 * 1024
@@ -461,15 +462,26 @@ export class LinkServer {
       this.#plain(res, 401, { error: { code: 'MISSING_SIGNATURE', message: '缺少签名头' } })
       return null
     }
+    // nonce 会被记进重放表，太长就是一个能撑内存的把手
+    if (nonce.length > 128 || mac.length > 128) {
+      this.#plain(res, 401, { error: { code: 'BAD_SIGNATURE', message: '签名头过长' } })
+      return null
+    }
     if (Math.abs(Date.now() - ts) > CLOCK_SKEW_MS) {
       this.#plain(res, 401, { error: { code: 'CLOCK_SKEW', message: '两端时间相差超过 5 分钟' } })
       return null
     }
     const expected = hmacHex(
       session.sk,
-      `${req.method}|${url.pathname}|${ts}|${nonce}|${
-        req.headers['x-dl-stream'] ? 'stream' : sha256(body)
-      }`,
+      signatureBase(
+        req.method,
+        // 查询串也要算进签名：客户端签的是 `/progress?syncId=…` 整段，
+        // 以前这里只取 pathname，带查询串的请求签名永远对不上（而调用方把 401 吞了）。
+        `${url.pathname}${url.search ?? ''}`,
+        ts,
+        nonce,
+        req.headers['x-dl-stream'] === '1' ? 'stream' : sha256(body),
+      ),
     )
     if (!safeEqualBuf(expected, mac)) {
       this.#plain(res, 401, { error: { code: 'BAD_SIGNATURE', message: '请求签名不合法' } })
