@@ -45,6 +45,7 @@ robocopy $src\dsh-remote-connect $dst /E /XD node_modules runtime /XF *.bak-* *.
 3. **本机绝对路径一律参数化**：`config.bridgeDir` → `config.dir` → 环境变量 → 默认值，四级回落。
 4. **能力缺失要能降级**：`installed()` 区分「没装」和「没起来」，前端给安装提示而不是报错。
 5. **包名/路由/数据目录/日志名一起改**：改名时 `grep` 一遍旧名，否则数据目录和日志会分裂成两套。
+6. **测试要能在别人的机器上跑**：CI 的 ubuntu 作业也会跑这些用例。凡是要靠 `netstat` / `taskkill` / `powershell.exe` 的断言，一律按 `process.platform` 分流——「Windows 上绿」不等于「绿」，1.0.6 就是这么在 ubuntu 上红过一次（见 CHANGELOG）。
 
 ---
 
