@@ -2,6 +2,21 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.4 — 2026-11-14
+
+设置页现在能只用键盘走完，读屏器也知道现在在哪个标签、哪些开关是开的。
+
+### 新增
+
+- 标签栏按 ARIA tabs 模式补齐：`role="tablist"` / `role="tab"` / `role="tabpanel"`，`aria-selected`、`aria-controls`、`aria-labelledby` 三对关系对得上；只有当前标签在 Tab 序列里（roving tabIndex），`←` `→` `Home` `End` 切换并跟着移焦点。
+- `test/a11y.mjs`：用一个自带的小渲染器把组件树摊平检查上面这些（含「挂了 onClick 却既不是按钮也没有 role」的裸元素），已进 `test/run-all.mjs`。
+
+### 修复
+
+- 提示条（toast）改成 `role="status"` + `aria-live="polite"`，读屏器会念出来；此前它只是块会消失的 div。
+- 加载态补 `role="status"`、转圈图标 `aria-hidden="true"`，错误态用 `role="alert"`（会打断，适合错误）。
+- 忙碌中的按钮加 `aria-busy="true"`；`dlk-dot` 装饰点标 `aria-hidden`。
+
 ## 1.0.3 — 2026-11-14
 
 安装器能自己说清楚参数了，也终于有了测试——它当年那版「只给 `--purge` 却反而又装一遍」的 bug，正是因为没有测试才活到发版。

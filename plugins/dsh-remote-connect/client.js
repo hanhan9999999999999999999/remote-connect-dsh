@@ -496,7 +496,8 @@ window.__ModuleLoader__.load({
     const useCtx = () => useContext(Ctx)
 
     function Spinner() {
-      return h('span', { className: 'dlk-spin' })
+      // 转圈本身不传达信息，给读屏器留出「加载中」的文字
+      return h('span', { className: 'dlk-spin', 'aria-hidden': 'true' })
     }
 
     function Btn({ children, onClick, variant, size, disabled, busy, title, type }) {
@@ -509,6 +510,7 @@ window.__ModuleLoader__.load({
           'data-size': size,
           title,
           disabled: disabled || busy,
+          'aria-busy': busy ? 'true' : undefined,
           onClick,
         },
         busy ? h(Spinner) : null,
@@ -561,7 +563,7 @@ window.__ModuleLoader__.load({
     }
 
     function Pill({ tone, children }) {
-      return h('span', { className: 'dlk-pill', 'data-tone': tone }, h('span', { className: 'dlk-dot' }), children)
+      return h('span', { className: 'dlk-pill', 'data-tone': tone }, h('span', { className: 'dlk-dot', 'aria-hidden': 'true' }), children)
     }
 
     function Card({ title, desc, right, children }) {
@@ -678,6 +680,23 @@ window.__ModuleLoader__.load({
         ['diagnostics', t('tabs.diagnostics')],
       ]
 
+      // 标签栏按 ARIA 的 tabs 模式走：只有当前标签在 Tab 序列里，左右键/Home/End 切换
+      const tabRefs = useRef({})
+      const onTabKey = (event) => {
+        const ids = tabs.map(([id]) => id)
+        const at = ids.indexOf(tab)
+        let next = null
+        if (event.key === 'ArrowRight') next = ids[(at + 1) % ids.length]
+        else if (event.key === 'ArrowLeft') next = ids[(at - 1 + ids.length) % ids.length]
+        else if (event.key === 'Home') next = ids[0]
+        else if (event.key === 'End') next = ids[ids.length - 1]
+        if (!next) return
+        event.preventDefault()
+        go(next)
+        const el = tabRefs.current[next]
+        if (el && typeof el.focus === 'function') el.focus()
+      }
+
       const go = (id) => {
         setTab(id)
         api('/config', 'POST', { ui: { lastTab: id } }).catch(() => {})
@@ -709,7 +728,7 @@ window.__ModuleLoader__.load({
           ),
           h(
             'div',
-            { className: 'dlk-tabs', role: 'tablist' },
+            { className: 'dlk-tabs', role: 'tablist', 'aria-label': t('title'), onKeyDown: onTabKey },
             tabs.map(([id, label]) =>
               h(
                 'button',
@@ -717,9 +736,15 @@ window.__ModuleLoader__.load({
                   key: id,
                   type: 'button',
                   role: 'tab',
+                  id: 'dlk-tab-' + id,
                   'aria-selected': tab === id,
+                  'aria-controls': 'dlk-panel-' + id,
+                  tabIndex: tab === id ? 0 : -1,
                   className: 'dlk-tab',
                   'data-active': tab === id,
+                  ref: (el) => {
+                    tabRefs.current[id] = el
+                  },
                   onClick: () => go(id),
                 },
                 label,
@@ -727,24 +752,30 @@ window.__ModuleLoader__.load({
             ),
           ),
           !status && !loadError
-            ? h('div', { className: 'dlk-empty' }, h(Spinner), ' ', t('common.loading'))
+            ? h('div', { className: 'dlk-empty', role: 'status' }, h(Spinner), ' ', t('common.loading'))
             : loadError && !status
               ? h(
                   'div',
-                  { className: 'dlk-empty' },
+                  { className: 'dlk-empty', role: 'alert' },
                   t('error.load') + '：' + loadError,
                   h('div', { style: { marginTop: 8 } }, h(Btn, { onClick: () => reload(false) }, t('common.retry'))),
                 )
               : h(
                   'div',
-                  { className: 'dlk-panel', role: 'tabpanel' },
+                  {
+                    className: 'dlk-panel',
+                    role: 'tabpanel',
+                    id: 'dlk-panel-' + tab,
+                    'aria-labelledby': 'dlk-tab-' + tab,
+                    tabIndex: 0,
+                  },
                   tab === 'overview' ? h(OverviewPage) : null,
                   tab === 'connect' ? h(ConnectPage) : null,
                   tab === 'sync' ? h(SyncPage) : null,
                   tab === 'phone' ? h(PhonePage) : null,
                   tab === 'diagnostics' ? h(DiagnosticsPage) : null,
                 ),
-          toast ? h('div', { className: 'dlk-toast', 'data-tone': toast.tone }, toast.message) : null,
+          toast ? h('div', { className: 'dlk-toast', 'data-tone': toast.tone, role: 'status', 'aria-live': 'polite' }, toast.message) : null,
         ),
       )
     }

@@ -1,6 +1,6 @@
 {
   "name": "dsh-remote-connect",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "type": "module",
   "description": "远程互联：手机和电脑互通（扫码配对、浏览器直接操作电脑上的 DSH），以及两台电脑之间同步插件、技能、规则、配置与会话",
   "keywords": ["dsh", "plugin", "remote", "phone", "sync", "remote-connect", "lan"],
