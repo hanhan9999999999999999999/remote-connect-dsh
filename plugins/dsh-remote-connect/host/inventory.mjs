@@ -117,9 +117,21 @@ function excludedFile(rel, size, maxFileBytes, includeSecrets = false) {
   return null
 }
 
+/**
+ * 排除理由的稳定代号：明细里给人看的是中文，跨进程报统计时用代号，
+ * 界面才能按自己的语言去翻译，而不用去匹配中文串。
+ */
+const EXCLUDE_CODES = {
+  '凭据/密钥': 'secret',
+  '日志/临时文件': 'log',
+  '超过单文件上限': 'big',
+}
+
 /** 记一条被排除的文件，列表最多留 40 条（计数不受限）。 */
 function noteExcluded(ctx, rel, reason) {
   ctx.excludedCount += 1
+  const code = EXCLUDE_CODES[reason] ?? 'other'
+  ctx.reasonCounts[code] = (ctx.reasonCounts[code] ?? 0) + 1
   if (ctx.excluded.length < 40) ctx.excluded.push({ rel, reason })
 }
 
@@ -173,6 +185,7 @@ export async function scanCategory(cat, { includeSecrets = false, maxFileMb = 51
     includeSecrets,
     excluded: [],
     excludedCount: 0,
+    reasonCounts: {},
     dirsScanned: 0,
     ownData: path.resolve(dataHome()),
   }
@@ -242,6 +255,8 @@ export async function listProfiles() {
 export async function scanAll({ cats, includeSecrets = false, maxFileMb = 512 } = {}) {
   const selected = (cats && cats.length ? cats : CATEGORY_ORDER).filter((c) => CATEGORIES[c])
   const excluded = []
+  const excludedReasons = {}
+  let excludedTotal = 0
   const started = Date.now()
   // The same relative path can be produced by two categories (a profile
   // package.json is both a config file and a virtual merged entry for the
@@ -258,6 +273,10 @@ export async function scanAll({ cats, includeSecrets = false, maxFileMb = 512 } 
       if (!prev || (!prev.op && item.op)) unique.set(key, item)
     }
     for (const ex of stats.excluded) excluded.push({ cat, ...ex })
+    excludedTotal += stats.excludedCount ?? 0
+    for (const [reason, n] of Object.entries(stats.reasonCounts ?? {})) {
+      excludedReasons[reason] = (excludedReasons[reason] ?? 0) + n
+    }
   }
   const entries = [...unique.values()]
   const summary = {}
@@ -271,6 +290,8 @@ export async function scanAll({ cats, includeSecrets = false, maxFileMb = 512 } 
     entries,
     summary,
     excluded,
+    excludedTotal,
+    excludedReasons,
     totalFiles: entries.length,
     totalBytes: entries.reduce((n, e) => n + e.size, 0),
     ms: Date.now() - started,

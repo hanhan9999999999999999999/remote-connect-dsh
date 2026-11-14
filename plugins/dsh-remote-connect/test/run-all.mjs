@@ -14,6 +14,7 @@ const suites = [
   'port-scan.mjs',
   'inventory-guard.mjs',
   'inventory-secrets.mjs',
+  'inventory-excluded.mjs',
   'deps.mjs',
   'bridge-dir.mjs',
   'security.mjs',

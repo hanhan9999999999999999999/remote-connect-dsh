@@ -15,6 +15,14 @@ window.__ModuleLoader__.load({
     const API = '/dsh-remote-connect-api'
     const NS = 'remoteConnect'
 
+    // 后端统计用的是代号（secret / log / big），界面按当前语言翻译
+    const EXCLUDE_LABEL = {
+      secret: 'excl.secret',
+      log: 'excl.log',
+      big: 'excl.big',
+      other: 'excl.other',
+    }
+
     /* ------------------------------------------------------------------ */
     /* i18n                                                               */
     /* ------------------------------------------------------------------ */
@@ -113,6 +121,11 @@ window.__ModuleLoader__.load({
       'sync.categories': '同步内容',
       'sync.scanRemote': '预览对端清单',
       'sync.remoteSummary': '{files} 个文件 · {size}',
+      'sync.excludedLine': '已按规则跳过 {n} 个文件（{what}）',
+      'excl.secret': '凭据/密钥',
+      'excl.log': '日志/临时',
+      'excl.big': '超大文件',
+      'excl.other': '其他',
       'sync.start': '开始同步',
       'sync.starting': '正在启动…',
       'sync.cancel': '取消',
@@ -278,6 +291,11 @@ window.__ModuleLoader__.load({
       'sync.categories': 'What to sync',
       'sync.scanRemote': 'Preview peer inventory',
       'sync.remoteSummary': '{files} files · {size}',
+      'sync.excludedLine': 'Skipped {n} files by rule ({what})',
+      'excl.secret': 'secrets',
+      'excl.log': 'logs/temp',
+      'excl.big': 'too large',
+      'excl.other': 'other',
       'sync.start': 'Start sync',
       'sync.starting': 'Starting…',
       'sync.cancel': 'Cancel',
@@ -1319,6 +1337,14 @@ window.__ModuleLoader__.load({
                   h(Btn, { onClick: scanRemote, busy: scanning }, scanning ? t('common.loading') : t('sync.scanRemote')),
                   remote
                     ? h('span', { className: 'dlk-hint' }, t('sync.remoteSummary').replace('{files}', remote.totalFiles).replace('{size}', fmtBytes(remote.totalBytes)))
+                    : null,
+                  // 排除规则的后端一直算着，界面以前一个字都不说：勾了「包含凭据」也没法确认生效没有。
+                  remote && remote.excludedTotal > 0
+                    ? h('span', { className: 'dlk-hint' }, t('sync.excludedLine')
+                        .replace('{n}', String(remote.excludedTotal))
+                        .replace('{what}', Object.keys(remote.excludedReasons ?? {})
+                          .map((r) => (EXCLUDE_LABEL[r] ? t(EXCLUDE_LABEL[r]) : r))
+                          .join(' · ')))
                     : null,
                 ),
                 remote && remote.summary
