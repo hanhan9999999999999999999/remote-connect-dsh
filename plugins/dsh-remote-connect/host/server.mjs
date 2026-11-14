@@ -27,7 +27,7 @@ import { buildConnectUri, dataHome } from './config.mjs'
 import { Applier } from './apply.mjs'
 import { PackCache, packStream, preparePack } from './pack.mjs'
 import { Discovery } from './discovery.mjs'
-import { FrameDecoderTransform, FrameEncoder } from './frames.mjs'
+import { FrameDecoderTransform, FrameEncoderTransform } from './frames.mjs'
 import { listProfiles } from './inventory.mjs'
 import { CLOCK_SKEW_MS, FailureTracker, NONCE_WINDOW_MS, clientIp, sanitizeDevice } from './guard.mjs'
 
@@ -568,7 +568,7 @@ export class LinkServer {
       'x-dl-manifest-id': pack.manifest.id,
     })
     try {
-      await pipeline(packStream(pack.entries), new FrameEncoder(session.sk), res)
+      await pipeline(packStream(pack.entries), new FrameEncoderTransform(session.sk), res)
       this.bytesOut += pack.totalBytes
       this.logger?.info('export', `已发送 ${pack.entries.length} 个文件`)
     } catch (err) {

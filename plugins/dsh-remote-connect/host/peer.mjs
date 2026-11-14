@@ -22,7 +22,7 @@ import {
   safeEqualBuf,
   sessionReadyProof,
 } from './crypto.mjs'
-import { FrameDecoderTransform, FrameEncoder } from './frames.mjs'
+import { FrameDecoderTransform, FrameEncoderTransform } from './frames.mjs'
 import { packStream } from './pack.mjs'
 
 const BASE = '/dsh-link/v1'
@@ -333,7 +333,7 @@ export class RemotePeer {
         { totalBytes, maxTotalBytes: peerMax },
       )
     }
-    const source = packStream(entries).pipe(new FrameEncoder(this.session.sk))
+    const source = packStream(entries).pipe(new FrameEncoderTransform(this.session.sk))
     let sent = 0
     source.on('data', (chunk) => {
       sent += chunk.length

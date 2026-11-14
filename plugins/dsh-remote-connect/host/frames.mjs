@@ -4,7 +4,7 @@
 import { Transform } from 'node:stream'
 import { FrameDecoder, encodeFrame } from './crypto.mjs'
 
-export class FrameEncoder extends Transform {
+export class FrameEncoderTransform extends Transform {
   constructor(key) {
     super()
     this.key = key

@@ -20,6 +20,7 @@ const suites = [
   'discovery.mjs',
   'pack.mjs',
   'push-guard.mjs',
+  'frames.mjs',
   'docs-guard.mjs',
   'install.mjs',
   'plugin-smoke.mjs',
