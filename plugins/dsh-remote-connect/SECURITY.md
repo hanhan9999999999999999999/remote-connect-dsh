@@ -67,12 +67,13 @@ HMAC-SK( METHOD | pathname | timestamp | nonce | sha256(body) )
 - 目录：`node_modules/`、`.git/`、`.svn/`、`.hg/`、`__pycache__/`、`.cache/`、`.next/`、`.turbo/`、
   `.venv/`、`venv/`、`dist/`、`build/`、`coverage/`；
 - 文件：`*.log`、`*.tmp`、`*.part`、`*.swp`、`*.map`、`*.lock`、`.DS_Store`、`Thumbs.db`；
-- 凭据类：`.credentials.yaml`、`.dshw-api.json`、`model_config.json`、`.env*`、
-  `*.pem/key/p12/pfx`、`id_rsa*`（含 ed25519 / ecdsa）、`.netrc`、`cookies*`；
+- 凭据类：`.credentials.yaml`、`.dshw-api.json`、`model_config.json`、`.env` / `.env.local` / `prod.env`
+  （凡以 `.env` 结尾的都算）、`*.pem/key/p12/pfx`、`id_rsa*`（含 ed25519 / ecdsa）、`.netrc`、`cookies*`；
 - `storages/session_projcache/`；
 - **远程互联自己的整个数据目录**（`config.json`、`peers.json`、`backups/`、`syncs/`）。
 
-“包含凭据”开关存在，但默认关闭，且需要用户在同步页显式勾选。
+「包含凭据」开关存在，默认关闭，需要用户在同步页显式勾选。勾上之后**目录深处的凭据文件也会跟着走**
+（勾的是「带上凭据」，不是「带上分类根目录那几个」）；日志与临时文件、超过单文件上限的东西不受这个开关影响。
 
 ## 6. 完整性、备份与回滚
 

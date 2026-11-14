@@ -95,19 +95,32 @@ const SECRET_FILE = [
   /(^|\/)\.credentials\.yaml$/i,
   /(^|\/)\.dshw-api\.json$/i,
   /(^|\/)model_config\.json$/i,
-  /(^|\/)\.env(\..*)?$/i,
+  // `.env`、`prod.env`、`.env.local` 都按凭据算：真实项目里三种写法都有人用，
+  // 只认「文件名正好是 .env」会漏掉后两种。
+  /\.env(\.[a-z0-9_-]+)?$/i,
   /\.(pem|key|p12|pfx)$/i,
   /(^|\/)id_(rsa|ed25519|ecdsa)(\.|$)/i,
   /(^|\/)\.netrc$/i,
   /(^|\/)cookies?(\.txt)?$/i,
 ]
 
-function excludedFile(rel, size, maxFileBytes) {
+/**
+ * Why one file must not travel. Secrets are only dropped when the caller has
+ * not opted in: 「包含凭据」在界面上是个明确开关，勾了就该真的带上，而不是
+ * 只对分类根目录下那几个直接文件生效、目录深处照样悄悄丢掉。
+ */
+function excludedFile(rel, size, maxFileBytes, includeSecrets = false) {
   const base = rel.slice(rel.lastIndexOf('/') + 1)
   if (ALWAYS_EXCLUDE_FILE.some((re) => re.test(base))) return '日志/临时文件'
-  if (SECRET_FILE.some((re) => re.test(rel))) return '凭据/密钥'
+  if (!includeSecrets && SECRET_FILE.some((re) => re.test(rel))) return '凭据/密钥'
   if (size > maxFileBytes) return `超过单文件上限`
   return null
+}
+
+/** 记一条被排除的文件，列表最多留 40 条（计数不受限）。 */
+function noteExcluded(ctx, rel, reason) {
+  ctx.excludedCount += 1
+  if (ctx.excluded.length < 40) ctx.excluded.push({ rel, reason })
 }
 
 async function walk(rootAbs, relRoot, ctx, out) {
@@ -141,10 +154,9 @@ async function walk(rootAbs, relRoot, ctx, out) {
     } catch {
       continue
     }
-    const reason = excludedFile(rel, stat.size, ctx.maxFileBytes)
+    const reason = excludedFile(rel, stat.size, ctx.maxFileBytes, ctx.includeSecrets)
     if (reason) {
-      ctx.excludedCount += 1
-      if (ctx.excluded.length < 40) ctx.excluded.push({ rel, reason })
+      noteExcluded(ctx, rel, reason)
       continue
     }
     out.push({ rel, size: stat.size, mtime: Math.round(stat.mtimeMs), mode: stat.mode & 0o777, abs })
@@ -158,6 +170,7 @@ export async function scanCategory(cat, { includeSecrets = false, maxFileMb = 51
   const root = dshHome()
   const ctx = {
     maxFileBytes: maxFileMb * 1024 * 1024,
+    includeSecrets,
     excluded: [],
     excludedCount: 0,
     dirsScanned: 0,
@@ -176,10 +189,9 @@ export async function scanCategory(cat, { includeSecrets = false, maxFileMb = 51
     if (stat.isDirectory()) {
       await walk(abs, rel, ctx, out)
     } else if (stat.isFile()) {
-      const reason = includeSecrets ? null : excludedFile(rel, stat.size, ctx.maxFileBytes)
+      const reason = excludedFile(rel, stat.size, ctx.maxFileBytes, includeSecrets)
       if (reason) {
-        ctx.excludedCount += 1
-        ctx.excluded.push({ rel, reason })
+        noteExcluded(ctx, rel, reason)
       } else {
         out.push({ rel, size: stat.size, mtime: Math.round(stat.mtimeMs), mode: stat.mode & 0o777, abs })
       }

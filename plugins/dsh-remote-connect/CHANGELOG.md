@@ -2,6 +2,18 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.25 — 2026-11-15
+
+### 修复
+
+- **「包含凭据」开关只对分类根目录下那几个直接文件生效**：`scanCategory` 里只有「根是文件」那条分支看了 `includeSecrets`，进目录以后的 `walk()` 一律套用 `excludedFile()`，于是 `.env`、`*.pem`、`id_rsa`、`cookies.txt` 这些**目录深处**的凭据即使勾了开关也照样被悄悄丢掉——界面上的勾选项等于半失效。现在 `includeSecrets` 进 `ctx`，两层判断都带上它。日志/临时文件与「超过单文件上限」不受这个开关影响（勾了凭据也不该把 2 GB 的 `.log` 拖过来）。
+- **`prod.env`、`app.env` 这类以 `.env` 结尾的凭据没被算进凭据**：原来的正则要求文件名正好是 `.env`（或 `.env.xxx`），真实项目里 `prod.env`、`prod.env.local` 同样常见。改成「以 `.env` 结尾」都算。
+
+### 新增
+
+- `test/inventory-secrets.mjs`（7 项断言）：默认挡下目录深处的 `.env`/`.pem`/`cookies.txt`/`id_rsa`/`prod.env`；勾上之后它们进清单；日志与临时文件勾不勾都不走；勾上凭据也不绕过单文件上限；排除明细最多留 40 条而计数照实累加；勾上后排除数确实变少。
+- `host/inventory.mjs` 里抽了 `noteExcluded(ctx, rel, reason)`：以前两条分支各写一份「记一条排除、最多 40 条」，其中一处还忘了封顶。
+
 ## 1.0.24 — 2026-11-15
 
 ### 修复
