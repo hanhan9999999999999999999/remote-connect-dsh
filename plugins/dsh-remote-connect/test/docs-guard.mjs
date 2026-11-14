@@ -151,6 +151,19 @@ for (const rel of linkFiles) {
 }
 assert.deepEqual(broken, [], `文档里的相对链接指不到文件：${broken.join('、')}`)
 
+/* 7. 文档里给用户抄的 #vX.Y.Z 必须是当前版本 -------------------------- */
+
+const tagFiles = ['README.md', ...readdirSync(path.join(pkgDir, 'docs')).map((f) => `docs/${f}`)]
+const staleTags = []
+let tagRefs = 0
+for (const rel of tagFiles) {
+  for (const m of read(rel).matchAll(/#v(\d+\.\d+\.\d+)(?=[&\s"')`])/g)) {
+    tagRefs += 1
+    if (m[1] !== pkg.version) staleTags.push(`${rel} → #v${m[1]}（当前 ${pkg.version}）`)
+  }
+}
+assert.deepEqual(staleTags, [], `文档里的安装标签过期了，照抄会装到旧版本：\n${staleTags.join('\n')}`)
+
 console.log(
-  `docs ok · 路由 ${ownRoutes.length}+${phoneRoutes.length} · 版本 ${pkg.version} · 词条 ${zh.length} 中英对齐 · 链接 ${checked} 条 0 坏链`,
+  `docs ok · 路由 ${ownRoutes.length}+${phoneRoutes.length} · 版本 ${pkg.version} · 词条 ${zh.length} 中英对齐 · 链接 ${checked} 条 0 坏链 · 版本标签 ${tagRefs} 处一致`,
 )
