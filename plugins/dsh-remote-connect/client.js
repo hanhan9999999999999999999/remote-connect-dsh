@@ -32,6 +32,7 @@ window.__ModuleLoader__.load({
       'common.saved': '已保存',
       'common.copy': '复制',
       'common.copied': '已复制',
+      'common.copyFailed': '复制失败，请手动选中',
       'common.confirm': '确认？',
       'common.cancel': '取消',
       'common.refresh': '刷新',
@@ -196,6 +197,7 @@ window.__ModuleLoader__.load({
       'common.saved': 'Saved',
       'common.copy': 'Copy',
       'common.copied': 'Copied',
+      'common.copyFailed': 'Copy failed — select it manually',
       'common.confirm': 'Confirm?',
       'common.cancel': 'Cancel',
       'common.refresh': 'Refresh',
@@ -561,20 +563,28 @@ window.__ModuleLoader__.load({
     }
 
     function CopyBtn({ text, label, t, size }) {
-      const [done, setDone] = useState(false)
+      // idle / done / fail：复制失败也要说一声，
+      // 否则用户点了「复制」什么都没发生，只会以为按钮坏了。
+      const [state, setState] = useState('idle')
+      const flash = (next) => {
+        setState(next)
+        setTimeout(() => setState('idle'), 1800)
+      }
       return h(
         Btn,
         {
           size,
+          title: state === 'fail' ? t('common.copyFailed') : undefined,
           onClick: async () => {
             const ok = await copyText(text)
-            if (ok) {
-              setDone(true)
-              setTimeout(() => setDone(false), 1500)
-            }
+            flash(ok ? 'done' : 'fail')
           },
         },
-        done ? '✓ ' + t('common.copied') : label || t('common.copy'),
+        state === 'done'
+          ? '✓ ' + t('common.copied')
+          : state === 'fail'
+            ? '✗ ' + t('common.copyFailed')
+            : label || t('common.copy'),
       )
     }
 

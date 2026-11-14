@@ -10,6 +10,7 @@ const suites = [
   'a11y.mjs',
   'tasks.mjs',
   'task-fields.mjs',
+  'ui-feedback.mjs',
   'port-scan.mjs',
   'inventory-guard.mjs',
   'inventory-secrets.mjs',
