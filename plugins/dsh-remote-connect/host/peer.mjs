@@ -304,10 +304,24 @@ export class RemotePeer {
       const err = await this.#jsonFrom(res, false)
       throw new AppError(err?.error?.code ?? 'EXPORT_FAILED', err?.error?.message ?? '对端拒绝导出')
     }
-    const tar = res.pipe(new FrameDecoderTransform(this.session.sk)).pipe(createGunzip())
-    const result = await applier.applyStream(state.id, tar)
-    onProgress?.({ phase: 'done', ...result, totalBytes: Number(result?.bytes ?? prep.totalBytes ?? 0) })
-    return { ...result, manifest: prep.manifest }
+    const decoder = new FrameDecoderTransform(this.session.sk)
+    const gunzip = createGunzip()
+    const tar = res.pipe(decoder).pipe(gunzip)
+    // 解码/解压这两环以前没有 error 监听：对端发来一段解不开的帧（或压缩流坏了），
+    // Transform 会直接 emit('error')，没人接就把整个进程抛死。
+    // 现在把它转成 tar 上的错误，交给 applyStream 的 pipeline reject 出去。
+    decoder.on('error', (err) => tar.destroy(err))
+    gunzip.on('error', (err) => tar.destroy(err))
+    try {
+      const result = await applier.applyStream(state.id, tar)
+      onProgress?.({ phase: 'done', ...result, totalBytes: Number(result?.bytes ?? prep.totalBytes ?? 0) })
+      return { ...result, manifest: prep.manifest }
+    } finally {
+      // 不管成没成都把这条下载流关掉：失败时（路径越界、校验不符、超限……）
+      // 对端还在继续往外传，不 destroy 的话 socket 会一直占着，几 GB 的包会在后台继续往本机淌。
+      if (!res.destroyed) res.destroy()
+      if (!tar.destroyed) tar.destroy()
+    }
   }
 
   /** Send local files to the peer, which applies them. */
@@ -378,6 +392,9 @@ export class RemotePeer {
     } finally {
       stopped = true
       if (timer) clearTimeout(timer)
+      // 对端提前拒了（413/401…）的时候，本地读流不会自己停：
+      // 不 destroy 就等于继续把几个 GB 的文件读完再丢掉。
+      if (!source.destroyed) source.destroy()
     }
   }
 
