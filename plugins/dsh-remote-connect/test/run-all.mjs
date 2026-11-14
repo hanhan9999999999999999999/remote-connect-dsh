@@ -16,6 +16,7 @@ const suites = [
   'guard.mjs',
   'peer-session.mjs',
   'rollback.mjs',
+  'pack-safety.mjs',
   'docs-guard.mjs',
   'install.mjs',
   'plugin-smoke.mjs',
