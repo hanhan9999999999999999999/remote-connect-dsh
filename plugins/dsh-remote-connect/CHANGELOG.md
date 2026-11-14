@@ -2,6 +2,12 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.26 — 2026-11-15
+
+### 修复
+
+- **`test/inventory-secrets.mjs` 在 Linux 上红（1.0.25 的 CI 只有 ubuntu · node 20 失败）**：那条断言写死「排除明细里要有 `skills/a/.env`」，可明细只留 40 条，而目录扫描顺序由文件系统决定——Linux 上那 50 个 `skills/many/dNN/.env` 先把名额占满了，`skills/a/.env` 排到了第 41 位以后。改成按**理由**查（存在 `reason === '凭据/密钥'` 的记录即可），断言与扫描顺序无关。产品代码没有改动。
+
 ## 1.0.25 — 2026-11-15
 
 ### 修复

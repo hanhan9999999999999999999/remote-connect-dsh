@@ -60,9 +60,10 @@ expect('默认不带凭据：.env / .pem / cookies / id_rsa 全被挡下', () =>
   assert.ok(offRels.includes('skills/a/SKILL.md'), '普通文件必须还在')
 })
 expect('默认的排除理由写着「凭据/密钥」', () => {
-  const hit = offStats.excluded.find((e) => e.rel === 'skills/a/.env')
-  assert.ok(hit, '应当记录一条排除说明')
-  assert.equal(hit.reason, '凭据/密钥')
+  // 明细只留 40 条：哪个文件先被扫到取决于文件系统顺序，所以按「理由」查，
+  // 不认死某一个路径（Linux 上 skills/a/.env 可能排在第 41 位）。
+  const hit = offStats.excluded.find((e) => e.reason === '凭据/密钥')
+  assert.ok(hit, '应当记录一条凭据类的排除说明')
 })
 
 // ② 勾上：凭据跟着走（这是以前坏掉的那一半）
