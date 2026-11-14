@@ -2,11 +2,12 @@
 /**
  * Installer / uninstaller for dsh-remote-connect.
  *
- *   node scripts/install.mjs                 # install into ~/.dsh, profile "desktop"
+ *   node scripts/install.mjs                 # install into $DSH_HOME (默认 ~/.dsh), profile "desktop"
+ *   node scripts/install.mjs --dsh-home D:\dsh-home
  *   node scripts/install.mjs --profile work  # another profile
- *   node scripts/install.mjs --dry-run       # show what would change
+ *   node scripts/install.mjs --dry-run       # show what would change, writes nothing
  *   node scripts/install.mjs --uninstall     # remove from profile, keep files
- *   node scripts/install.mjs --uninstall --purge
+ *   node scripts/install.mjs --purge         # same as --uninstall, and delete the copied files too
  *
  * It never restarts DSH. The new plugin becomes visible after the next launch.
  */
@@ -27,7 +28,7 @@ const value = (name, fallback) => {
 const dshHome = path.resolve(value('--dsh-home', process.env.DSH_HOME || path.join(os.homedir(), '.dsh')))
 const profileName = value('--profile', 'desktop')
 const dryRun = flag('--dry-run')
-const uninstall = flag('--uninstall')
+const uninstall = flag('--uninstall') || flag('--purge')
 const purge = flag('--purge')
 const pkgName = 'dsh-remote-connect'
 const target = path.join(dshHome, 'plugins', 'dsh-remote-connect')
@@ -84,8 +85,10 @@ async function main() {
       await fs.writeFile(profileFile, JSON.stringify(profile, null, 2) + '\n')
       if (purge) await fs.rm(target, { recursive: true, force: true })
     }
-    console.log(`removed from profile${purge ? ' and deleted plugin files' : ' (files kept)'}`)
-    console.log('\n重启 DSH 后生效。')
+    const suffix = purge ? (dryRun ? ' and delete plugin files' : ' and deleted plugin files') : ' (files kept)'
+    console.log(`${dryRun ? 'will remove' : 'removed'} from profile${suffix}`)
+    if (dryRun) console.log('\n· 试运行结束：上面这些都没有写盘。')
+    else console.log('\n重启 DSH 后生效。')
     return
   }
 
@@ -129,6 +132,10 @@ async function main() {
   console.log(`profile dependency${previous ? ` (replaced ${previous})` : ''} → file:../../plugins/dsh-remote-connect`)
   console.log('profile bundles += dsh-remote-connect')
 
+  if (dryRun) {
+    console.log('\n· 试运行结束：上面这些都没有写盘。去掉 --dry-run 才真装。')
+    return
+  }
   console.log('\n✅ 安装完成。')
   console.log('   打开 DSH → 设置 → 远程互联。')
   console.log('   ⚠ 本安装器不会重启 DSH；请手动退出并重新打开 DSH 后生效。')
