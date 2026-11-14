@@ -8,6 +8,7 @@ const suites = [
   'client-smoke.mjs',
   'i18n-guard.mjs',
   'a11y.mjs',
+  'logger.mjs',
   'tasks.mjs',
   'task-fields.mjs',
   'ui-feedback.mjs',

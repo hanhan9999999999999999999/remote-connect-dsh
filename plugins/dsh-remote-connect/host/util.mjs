@@ -11,7 +11,7 @@ import path from 'node:path'
 export const APP_ID = 'dsh-remote-connect'
 export const APP_NAME = '远程互联'
 export const PROTOCOL = 'dsh-link/v1'
-export const VERSION = '1.0.56'
+export const VERSION = '1.0.57'
 
 /** @returns {string} */
 export function rid(bytes = 12) {
@@ -194,23 +194,82 @@ export class AppError extends Error {
 }
 
 export class Logger {
-  constructor({ ring = 500, file = null } = {}) {
+  constructor({ ring = 500, file = null, maxPendingBytes = 4 * 1024 * 1024 } = {}) {
     this.ring = ring
     this.file = file
     this.entries = []
     this.stream = null
     this.seenOnce = new Set()
+    /** 首次写盘失败的原因；有值之后不再尝试打开文件，只留内存。 */
+    this.fileBroken = null
+    /** 还没真正落到盘上的字节数，用来给背压兜底。 */
+    this.pendingBytes = 0
+    this.maxPendingBytes = Number.isFinite(maxPendingBytes) && maxPendingBytes > 0 ? maxPendingBytes : 4 * 1024 * 1024
+    /** 因为背压/写不进去被丢掉的条数。 */
+    this.dropped = 0
+    this.closed = false
+  }
+  #noteInMemory(level, scope, msg) {
+    const entry = { t: Date.now(), level, scope, msg: String(msg) }
+    this.entries.push(entry)
+    if (this.entries.length > this.ring) this.entries.splice(0, this.entries.length - this.ring)
+    return entry
+  }
+  #ensureStream() {
+    if (this.closed || !this.file || this.fileBroken) return null
+    if (this.stream) return this.stream
+    let stream
+    try {
+      stream = fs.createWriteStream(this.file, { flags: 'a' })
+    } catch (err) {
+      this.fileBroken = `${err?.code ?? 'ERROR'}: ${err?.message ?? err}`
+      this.#noteInMemory('warn', 'log', `日志文件打不开（${this.fileBroken}），之后只留在内存里：${this.file}`)
+      return null
+    }
+    // 写盘的错误是异步抛的：不挂 error 监听，Node 会把它升级成未捕获异常，
+    // 整个 DSH 跟着一起退出——「日志写不进去」不该是致命错误。
+    stream.on('error', (err) => {
+      this.fileBroken = `${err?.code ?? 'ERROR'}: ${err?.message ?? err}`
+      this.pendingBytes = 0
+      try {
+        stream.destroy()
+      } catch {
+        /* ignore */
+      }
+      if (this.stream === stream) this.stream = null
+      this.#noteInMemory('warn', 'log', `日志文件写不进去（${this.fileBroken}），之后只留在内存里：${this.file}`)
+    })
+    this.stream = stream
+    return stream
   }
   #push(level, scope, msg, extra) {
     const entry = { t: Date.now(), level, scope, msg: String(msg), ...(extra ? { extra } : {}) }
     this.entries.push(entry)
     if (this.entries.length > this.ring) this.entries.splice(0, this.entries.length - this.ring)
-    if (this.file) {
+    const stream = this.#ensureStream()
+    if (stream) {
+      let line = ''
       try {
-        if (!this.stream) this.stream = fs.createWriteStream(this.file, { flags: 'a' })
-        this.stream.write(`${JSON.stringify(entry)}\n`)
+        line = `${JSON.stringify(entry)}\n`
       } catch {
-        /* logging must never throw */
+        // 循环引用之类的 extra：退回只有基本字段的一行
+        line = `${JSON.stringify({ t: entry.t, level: entry.level, scope: entry.scope, msg: entry.msg })}\n`
+      }
+      if (this.pendingBytes + line.length > this.maxPendingBytes) {
+        // 盘写得比产生的慢（或卡住）时，宁可丢日志也不能把内存吃光
+        this.dropped += 1
+        if (this.dropped === 1) {
+          this.#noteInMemory('warn', 'log', `日志积压超过 ${Math.round(this.maxPendingBytes / 1024)} KB，后续写不进去的行会被丢弃`)
+        }
+      } else {
+        this.pendingBytes += line.length
+        try {
+          stream.write(line, () => {
+            this.pendingBytes = Math.max(0, this.pendingBytes - line.length)
+          })
+        } catch {
+          this.pendingBytes = Math.max(0, this.pendingBytes - line.length)
+        }
       }
     }
     return entry
@@ -240,8 +299,11 @@ export class Logger {
     return this.entries.slice(-limit)
   }
   close() {
+    this.closed = true
+    const stream = this.stream
+    this.stream = null
     try {
-      this.stream?.end()
+      stream?.end()
     } catch {
       /* ignore */
     }
