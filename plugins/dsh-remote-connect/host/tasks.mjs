@@ -1,0 +1,92 @@
+/**
+ * dsh-remote-connect · tasks
+ *
+ * 同步任务表。设置页轮询的就是这里。
+ *
+ * 任务只活在内存里：进程重启后清空，历史结果看 `syncs/` 目录。
+ * 表有上限（默认 40 条），超了按 `startedAt` 淘汰最老的一条，
+ * 免得长期运行以后这张表无限长大。
+ */
+import { rid } from './util.mjs'
+
+export const MAX_TASKS = 40
+
+/** 建一条新任务（还没开始跑，`phase: 'queued'`）。 */
+export function newTask({ kind = 'sync', direction = 'push', peerId } = {}) {
+  return {
+    id: `t_${rid(6)}`,
+    kind,
+    direction,
+    peerId,
+    phase: 'queued',
+    done: 0,
+    total: 0,
+    bytes: 0,
+    totalBytes: 0,
+    startedAt: Date.now(),
+    finishedAt: null,
+    error: null,
+    result: null,
+    detail: '',
+  }
+}
+
+/** 对外视图：只给前端需要的字段，不把内部引用漏出去。 */
+export function taskView(t) {
+  return {
+    id: t.id,
+    kind: t.kind,
+    direction: t.direction,
+    peerId: t.peerId,
+    phase: t.phase,
+    done: t.done,
+    total: t.total,
+    bytes: t.bytes,
+    totalBytes: t.totalBytes,
+    detail: t.detail,
+    startedAt: t.startedAt,
+    finishedAt: t.finishedAt,
+    error: t.error,
+    result: t.result,
+  }
+}
+
+export class TaskTable {
+  constructor(max = MAX_TASKS) {
+    this.max = max
+    this.map = new Map()
+  }
+
+  get size() {
+    return this.map.size
+  }
+
+  /** 收下一条任务，必要时淘汰最老的一条；返回那条任务本身（后面还要往里写进度）。 */
+  add(task) {
+    this.map.set(task.id, task)
+    this.#trim()
+    return task
+  }
+
+  get(id) {
+    return this.map.get(id) ?? null
+  }
+
+  /** 给前端看的视图；找不到返回 null。 */
+  view(id) {
+    const t = this.get(id)
+    return t ? taskView(t) : null
+  }
+
+  /** 最近 n 条（按插入顺序，最新在后）。 */
+  recent(n = 10) {
+    return [...this.map.values()].slice(-n).map(taskView)
+  }
+
+  #trim() {
+    if (this.map.size <= this.max) return
+    let oldest = null
+    for (const t of this.map.values()) if (!oldest || t.startedAt < oldest.startedAt) oldest = t
+    if (oldest) this.map.delete(oldest.id)
+  }
+}

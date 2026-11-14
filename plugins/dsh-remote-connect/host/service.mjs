@@ -7,7 +7,7 @@
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { AppError, Logger, VERSION, humanBytes, lanAddresses, rid } from './util.mjs'
+import { AppError, Logger, VERSION, humanBytes, lanAddresses } from './util.mjs'
 import { ConfigStore, buildConnectUri, dataHome, dshHome, parseConnectUri } from './config.mjs'
 import { LinkServer } from './server.mjs'
 import { RemotePeer } from './peer.mjs'
@@ -16,8 +16,7 @@ import { Applier } from './apply.mjs'
 import { PackCache, preparePack } from './pack.mjs'
 import { CATEGORY_ORDER, CATEGORIES, listProfiles } from './inventory.mjs'
 import { installPluginDeps, scanPluginDeps } from './deps.mjs'
-
-const MAX_TASKS = 40
+import { TaskTable, newTask, taskView } from './tasks.mjs'
 
 export class LinkService {
   constructor({ logger, store } = {}) {
@@ -28,7 +27,7 @@ export class LinkService {
     this.localApplier = null
     this.packCache = null
     this.clients = new Map()
-    this.tasks = new Map()
+    this.tasks = new TaskTable()
     this.ready = null
   }
 
@@ -142,7 +141,7 @@ export class LinkService {
       config: await this.publicConfig(),
       peers: await this.peerStore.list(),
       recent: await this.localApplier.listRecent(8).catch(() => []),
-      tasks: [...this.tasks.values()].slice(-10).map(taskView),
+      tasks: this.tasks.recent(10),
     }
   }
 
@@ -372,27 +371,7 @@ export class LinkService {
   /* ---------------------------------------------------------------- */
 
   startSync({ peerId, direction = 'push', cats, includeSecrets = false }) {
-    const task = {
-      id: `t_${rid(6)}`,
-      kind: 'sync',
-      direction,
-      peerId,
-      phase: 'queued',
-      done: 0,
-      total: 0,
-      bytes: 0,
-      totalBytes: 0,
-      startedAt: Date.now(),
-      finishedAt: null,
-      error: null,
-      result: null,
-      detail: '',
-    }
-    this.tasks.set(task.id, task)
-    if (this.tasks.size > MAX_TASKS) {
-      const oldest = [...this.tasks.values()].sort((a, b) => a.startedAt - b.startedAt)[0]
-      this.tasks.delete(oldest.id)
-    }
+    const task = this.tasks.add(newTask({ direction, peerId }))
     this.#runSync(task, { cats, includeSecrets }).catch((err) => {
       task.phase = 'failed'
       task.error = `${err.code ?? 'ERROR'}: ${err.message}`
@@ -452,8 +431,7 @@ export class LinkService {
   }
 
   task(id) {
-    const t = this.tasks.get(id)
-    return t ? taskView(t) : null
+    return this.tasks.view(id)
   }
 
   async cancelTask(id) {
@@ -525,24 +503,6 @@ export class LinkService {
   }
 }
 
-function taskView(t) {
-  return {
-    id: t.id,
-    kind: t.kind,
-    direction: t.direction,
-    peerId: t.peerId,
-    phase: t.phase,
-    done: t.done,
-    total: t.total,
-    bytes: t.bytes,
-    totalBytes: t.totalBytes,
-    detail: t.detail,
-    startedAt: t.startedAt,
-    finishedAt: t.finishedAt,
-    error: t.error,
-    result: t.result,
-  }
-}
 
 async function exists(p) {
   try {

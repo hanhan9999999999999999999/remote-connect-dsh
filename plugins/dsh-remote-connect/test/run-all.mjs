@@ -7,6 +7,7 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const suites = [
   'client-smoke.mjs',
   'a11y.mjs',
+  'tasks.mjs',
   'inventory-guard.mjs',
   'deps.mjs',
   'bridge-dir.mjs',

@@ -12,7 +12,7 @@
 | 💻 **电脑互联** | 两台电脑互扫配对，同步插件 / 技能 / 规则 / 配置 / 会话，随时可回滚 | 设置 → 远程互联 → 互联 |
 
 - 插件名：`dsh-remote-connect`
-- 版本：1.0.4
+- 版本：1.0.5
 - 许可证：MIT
 - 需要的 DSH：带 `webServer` 服务、客户端支持 `settings.section` 插槽的版本
 
@@ -41,7 +41,7 @@ https://cdn.jsdelivr.net/gh/hanhan9999999999999999999/remote-connect-dsh@main/in
 > 就会以为「怎么装到的还是旧版」。要「现在就是最新」，用上面的 raw 地址；要「永远是某一版」，
 > 用下面的 git 直装并钉标签或 40 位 SHA。
 
-索引里只有这一个插件，版本 `1.0.4`，来源是本仓库的 `plugins/dsh-remote-connect` 子目录。
+索引里只有这一个插件，版本 `1.0.5`，来源是本仓库的 `plugins/dsh-remote-connect` 子目录。
 
 ### 方式二：用 git 直装
 
@@ -49,10 +49,10 @@ https://cdn.jsdelivr.net/gh/hanhan9999999999999999999/remote-connect-dsh@main/in
 
 ```powershell
 # 用发行标签装（推荐，标签指向这一版的发布提交）
-pnpm add "git+https://github.com/hanhan9999999999999999999/remote-connect-dsh.git#v1.0.4&path:/plugins/dsh-remote-connect"
+pnpm add "git+https://github.com/hanhan9999999999999999999/remote-connect-dsh.git#v1.0.5&path:/plugins/dsh-remote-connect"
 ```
 
-想钉死某个 commit 也可以，把 `#v1.0.4` 换成 40 位 SHA；`index.json` 里钉的就是同一版的具体
+想钉死某个 commit 也可以，把 `#v1.0.5` 换成 40 位 SHA；`index.json` 里钉的就是同一版的具体
 commit（社区市场要求 40 位 SHA），两者由发版流程一起更新，见 `RELEASING.md` 第 5 节。
 
 ### 方式三：手动放进 profile
@@ -149,7 +149,8 @@ plugins/dsh-remote-connect/
 ├── index.js              Host 半：注册 /dsh-remote-connect-api/*，挂载手机通道
 ├── client.js             客户端半：设置页「远程互联」分区（slots/设置/locale）
 ├── host/
-│   ├── service.mjs       互联服务：配对、同步、回滚
+│   ├── service.mjs       互联服务：配对、同步、回滚（编排）
+│   ├── tasks.mjs         同步任务表（内存、上限 40 条、按开始时间淘汰）
 │   ├── peer.mjs/peers.mjs 对端握手、探测、对端表
 │   ├── discovery.mjs     局域网发现
 │   ├── inventory.mjs     可同步内容清点
