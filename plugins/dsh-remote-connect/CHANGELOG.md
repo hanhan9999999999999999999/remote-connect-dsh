@@ -2,6 +2,25 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.9 — 2026-11-14
+
+继续拆 `server.mjs`（650 → 607 行）：把跟 HTTP 无关的那一小撮安全逻辑搬出去，顺便让它第一次能被单独断言。
+
+### 变更
+
+- 新增 `host/guard.mjs`：`clientIp()`、`sanitizeDevice()`、`FailureTracker`（失败计数与锁定）、以及四个常数 `LOCK_AFTER(10)` / `LOCK_MS(10 分钟)` / `NONCE_WINDOW_MS(10 分钟)` / `CLOCK_SKEW_MS(5 分钟)`。`server.mjs` 里原来那三个私有方法（`#blocked` / `#registerFailure` / `#clearFailures`）和两个末尾小函数都删掉了，改成 `this.guard.xxx()`。
+- 行为没变：仍然是「连续失败 10 次锁 10 分钟、成功即清零、到期顺手丢记录」。
+
+### 新增
+
+- `test/guard.mjs`：8 项断言——`clientIp` 去 IPv4-mapped 前缀且拿不到地址不炸、`sanitizeDevice` 只留四个字段并按长度截断、第 9 次失败还不锁第 10 次才锁、锁满 10 分钟自动解开且记录被清掉、不同 IP 各记各的、四个常数与 `SECURITY.md` 里的数字一致。已进 `test/run-all.mjs`。
+- `test/security.mjs` 改成从 `host/guard.mjs` 读锁定与签名窗口的常数（它们搬家了），并额外断言 `server.mjs` 的 `#prune` 确实用了 `NONCE_WINDOW_MS`。
+
+### 文档
+
+- `docs/ARCHITECTURE.md` 的进程图按现在的模块重画：加上 `Guard`，并把框线宽度全部对齐（以前有几行差 1–2 格，中文全角字符也算过之后就不再错位）。
+- 根 `README.md` 目录树补上 `guard.mjs`。
+
 ## 1.0.8 — 2026-11-14
 
 `SECURITY.md` 里那些数字（scrypt 参数、挑战 60 秒、会话 12 小时、锁 10 分钟、备份 5 批……）以前全靠人记着别写错，现在有一条测试把它们钉在代码上。

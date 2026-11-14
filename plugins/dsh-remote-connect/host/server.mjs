@@ -29,6 +29,7 @@ import { PackCache, packStream, preparePack } from './pack.mjs'
 import { Discovery } from './discovery.mjs'
 import { FrameDecoderTransform, FrameEncoder } from './frames.mjs'
 import { listProfiles } from './inventory.mjs'
+import { CLOCK_SKEW_MS, FailureTracker, NONCE_WINDOW_MS, clientIp, sanitizeDevice } from './guard.mjs'
 
 const BASE = '/dsh-link/v1'
 const MAX_JSON = 4 * 1024 * 1024
@@ -62,7 +63,7 @@ export class LinkServer {
     this.port = null
     this.sessions = new Map()
     this.challenges = new Map()
-    this.failures = new Map()
+    this.guard = new FailureTracker()
     this.nonces = new Map()
     this.packs = new Map()
     this.discovery = null
@@ -202,7 +203,7 @@ export class LinkServer {
     if (!route.startsWith(BASE)) return this.#plain(res, 404, { error: { code: 'NOT_FOUND', message: '未知接口' } })
     const sub = route.slice(BASE.length) || '/'
     const ip = clientIp(req)
-    if (sub !== '/health' && this.#blocked(ip)) {
+    if (sub !== '/health' && this.guard.blocked(ip)) {
       return this.#plain(res, 429, { error: { code: 'LOCKED', message: '尝试次数过多，请稍后再试' } })
     }
 
@@ -394,11 +395,11 @@ export class LinkServer {
     )
     const given = Buffer.from(String(data.proof ?? ''), 'base64')
     if (!safeEqualBuf(expected, given)) {
-      this.#registerFailure(ip)
+      this.guard.register(ip, { logger: this.logger })
       this.logger?.warn('auth', `密码错误：${challenge.device.name} (${ip})`)
       return this.#plain(res, 401, { error: { code: 'BAD_PASSWORD', message: '连接密码不正确' } })
     }
-    this.#clearFailures(ip)
+    this.guard.clear(ip)
     const sk = deriveSessionKey(await this.#masterKey(cfg), challenge.clientNonce, challenge.serverNonce)
     const token = rid(32)
     const session = {
@@ -453,7 +454,7 @@ export class LinkServer {
       this.#plain(res, 401, { error: { code: 'MISSING_SIGNATURE', message: '缺少签名头' } })
       return null
     }
-    if (Math.abs(Date.now() - ts) > 5 * 60 * 1000) {
+    if (Math.abs(Date.now() - ts) > CLOCK_SKEW_MS) {
       this.#plain(res, 401, { error: { code: 'CLOCK_SKEW', message: '两端时间相差超过 5 分钟' } })
       return null
     }
@@ -588,58 +589,14 @@ export class LinkServer {
   /* throttling                                                       */
   /* ---------------------------------------------------------------- */
 
-  #blocked(ip) {
-    const f = this.failures.get(ip)
-    if (!f) return false
-    if (f.lockedUntil && f.lockedUntil > Date.now()) return true
-    if (f.lockedUntil && f.lockedUntil <= Date.now()) {
-      this.failures.delete(ip)
-      return false
-    }
-    return false
-  }
-
-  #registerFailure(ip) {
-    const f = this.failures.get(ip) ?? { count: 0, lockedUntil: 0 }
-    f.count += 1
-    if (f.count >= 10) {
-      f.lockedUntil = Date.now() + 10 * 60 * 1000
-      this.logger?.warn('auth', `${ip} 连续失败 ${f.count} 次，锁定 10 分钟`)
-    } else {
-      f.lockedUntil = 0
-    }
-    this.failures.set(ip, f)
-  }
-
-  #clearFailures(ip) {
-    this.failures.delete(ip)
-  }
-
   #prune() {
     const now = Date.now()
     for (const [k, v] of this.challenges) if (v.expiresAt < now) this.challenges.delete(k)
-    for (const [k, ts] of this.nonces) if (now - ts > 10 * 60 * 1000) this.nonces.delete(k)
+    for (const [k, ts] of this.nonces) if (now - ts > NONCE_WINDOW_MS) this.nonces.delete(k)
     for (const [k, s] of this.sessions) if (s.expiresAt < now) this.sessions.delete(k)
   }
 }
 
-function clientIp(req) {
-  const raw = req.socket?.remoteAddress ?? ''
-  if (raw.startsWith('::ffff:')) return raw.slice(7)
-  return raw
-}
-
-function sanitizeDevice(device) {
-  if (!device || typeof device !== 'object') return null
-  const id = typeof device.id === 'string' ? device.id.slice(0, 64) : ''
-  if (!id) return null
-  return {
-    id,
-    name: String(device.name ?? '未命名设备').slice(0, 48),
-    platform: String(device.platform ?? '').slice(0, 64),
-    version: String(device.version ?? '').slice(0, 24),
-  }
-}
 
 function normalizeCats(cats, cfg) {
   const order = ['skills', 'rules', 'plugins', 'config', 'sessions', 'plugin-data']

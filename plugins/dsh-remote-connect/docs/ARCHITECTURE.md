@@ -18,24 +18,21 @@
 ## 2. 进程与层次
 
 ```
-┌──────────────────────────── DSH 主进程 ────────────────────────────┐
-│  host/index.js  (cordis 插件)                                      │
-│    ├─ 注册 /dsh-remote-connect-api/*   ← 设置页调用（同源 HTTP）      │
-│    ├─ LinkService（单例）                                          │
-│    │    ├─ LinkServer   :8788   TCP HTTP + UDP 发现                 │
-│    │    ├─ RemotePeer   连接远端 LinkServer                         │
-│    │    ├─ Inventory    扫描 $DSH_HOME → 分类清单                   │
-│    │    ├─ Archiver     纯 JS tar + gzip（无依赖）                  │
-│    │    └─ Applier      暂存 → 校验 → 备份 → 落盘 → 日志/回滚       │
-│    └─ 日志环 / TaskTable（host/tasks.mjs，内存，上限 40）/ 配置     │
-│       手机通道 host/phone.mjs → host/port-scan.mjs（端口）     │
-└────────────────────────────────────────────────────────────────────┘
-
-        ▲ 同源 fetch                        ▲ HTTPS(可选) / HTTP + 应用层加密
-        │                                   │
-┌───────┴────────┐                 ┌────────┴─────────┐
-│ 设置页 (React) │                 │ 另一台 DSH 的同款 │
-└────────────────┘                 └──────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│ DSH 主进程（cordis 插件跑在这里）                                │
+│ host/index.js  (cordis 插件)                                     │
+│   ├─ 注册 /dsh-remote-connect-api/*   ← 设置页调用（同源 HTTP）  │
+│   └─ LinkService（单例）                                         │
+│        ├─ LinkServer   :8788   TCP HTTP + UDP 发现               │
+│        ├─ RemotePeer   连接远端 LinkServer                       │
+│        ├─ Inventory    扫描 $DSH_HOME → 分类清单                 │
+│        ├─ Archiver     纯 JS tar + gzip（无依赖）                │
+│        ├─ Applier      暂存 → 校验 → 备份 → 落盘 → 日志/回滚     │
+│        ├─ Guard        失败锁定 / 签名窗口（host/guard.mjs）     │
+│        ├─ 日志环 / TaskTable（host/tasks.mjs，内存，上限 40）    │
+│        └─ 手机通道 host/phone.mjs → host/port-scan.mjs（端口）   │
+│ 对端是另一台机器的同款服务（HTTP 可选 / 应用层 GCM 加密）        │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 为什么要自己起一个端口，而不是挂在 DSH 的 Web 服务上？

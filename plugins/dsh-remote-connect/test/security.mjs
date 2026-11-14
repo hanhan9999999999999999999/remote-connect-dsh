@@ -15,6 +15,7 @@ const read = (rel) => readFileSync(path.join(pkgDir, rel), 'utf8')
 const doc = read('SECURITY.md')
 const crypto = read('host/crypto.mjs')
 const server = read('host/server.mjs')
+const guard = read('host/guard.mjs')
 const apply = read('host/apply.mjs')
 
 let pass = 0
@@ -54,16 +55,18 @@ await ok('挑战 60 秒、会话 12 小时，与文档一致', async () => {
 })
 
 await ok('时钟偏移 5 分钟、失败 10 次锁 10 分钟，与文档一致', async () => {
-  assert.ok(server.includes('5 * 60 * 1000'), 'server.mjs 里找不到 5 分钟时钟窗口')
-  assert.ok(server.includes('f.count >= 10'), 'server.mjs 里找不到 10 次阈值')
-  assert.ok(server.includes('10 * 60 * 1000'), 'server.mjs 里找不到 10 分钟锁定')
+  // 这三个常数住在 host/guard.mjs（1.0.9 从 server.mjs 搬过去），文档里的数字要对得上它们
+  assert.ok(guard.includes('CLOCK_SKEW_MS = 5 * 60 * 1000'), 'guard.mjs 里找不到 5 分钟时钟窗口')
+  assert.ok(guard.includes('LOCK_AFTER = 10'), 'guard.mjs 里找不到 10 次阈值')
+  assert.ok(guard.includes('LOCK_MS = 10 * 60 * 1000'), 'guard.mjs 里找不到 10 分钟锁定')
   assert.ok(doc.includes('5 分钟'), '文档没写时钟偏移 5 分钟')
   assert.ok(doc.includes('10 次'), '文档没写失败 10 次')
   assert.ok(doc.includes('10 分钟'), '文档没写锁 10 分钟')
 })
 
 await ok('nonce 窗口 10 分钟，与文档一致', async () => {
-  assert.ok(/now - ts > 10 \* 60 \* 1000/.test(server), 'server.mjs 里找不到 nonce 10 分钟窗口')
+  assert.ok(guard.includes('NONCE_WINDOW_MS = 10 * 60 * 1000'), 'guard.mjs 里找不到 nonce 10 分钟窗口')
+  assert.ok(server.includes('NONCE_WINDOW_MS'), 'server.mjs 的 #prune 没用上 NONCE_WINDOW_MS')
   assert.ok(doc.includes('10 分钟窗口内只能使用一次'), '文档没写 nonce 窗口')
 })
 
