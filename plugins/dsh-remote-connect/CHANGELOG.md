@@ -2,6 +2,19 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.10 — 2026-11-14
+
+对着 `peer.mjs` 把「会话过期以后会怎样」走了一遍，走出两个真问题：一个会让人**只能手动重连**，一个让**超时被误报成网络错误**。
+
+### 修复
+
+- 会话过期后本地缓存不清：`ensureConnected()` 只看 `peer.session` 有没有，不看它是否过期；`#jsonFrom()` 拿到 401 也只抛错不清理。结果是进程一直拿着作废的 token 反复撞 401，用户必须手动断开重连才恢复。现在新增 `sessionUsable()`（留 30 秒余量），过期或收到 `UNAUTHORIZED` / `SESSION_EXPIRED` 时立刻把本地 session 置空，下一次操作自动重新握手。
+- 超时被压成 `NETWORK`：`#request()` 把**所有** error 事件都包装成 `NETWORK`，连它自己 `req.destroy(new AppError('TIMEOUT'))` 造出来的超时也被吞掉。`index.js` 的 502 映射里那条 `TIMEOUT` 因此从来没被命中过。现在 `AppError` 原样透传，只有真正的 socket 错误才转成 `NETWORK`。
+
+### 新增
+
+- `test/peer-session.mjs`：起一个只按脚本回答的假对端，5 项断言——过期判定的边界、正常响应不动会话、401 之后会话被清空、对端不回话时错误码是 `TIMEOUT`、端口没人监听时是 `NETWORK` 且提示可读。已进 `test/run-all.mjs`（现在 14 个套件）。
+
 ## 1.0.9 — 2026-11-14
 
 继续拆 `server.mjs`（650 → 607 行）：把跟 HTTP 无关的那一小撮安全逻辑搬出去，顺便让它第一次能被单独断言。

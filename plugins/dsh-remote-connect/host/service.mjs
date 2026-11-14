@@ -10,7 +10,7 @@ import path from 'node:path'
 import { AppError, Logger, VERSION, humanBytes, lanAddresses } from './util.mjs'
 import { ConfigStore, buildConnectUri, dataHome, dshHome, parseConnectUri } from './config.mjs'
 import { LinkServer } from './server.mjs'
-import { RemotePeer } from './peer.mjs'
+import { RemotePeer, sessionUsable } from './peer.mjs'
 import { PeerStore } from './peers.mjs'
 import { Applier } from './apply.mjs'
 import { PackCache, preparePack } from './pack.mjs'
@@ -294,7 +294,10 @@ export class LinkService {
 
   async ensureConnected(id) {
     const peer = await this.#peer(id)
-    if (peer.session) return peer
+    if (sessionUsable(peer.session)) return peer
+    // 手里那个 session 已经过期（或压根没有）：丢掉它再走「恢复 / 重新握手」，
+    // 否则进程会一直拿作废的 token 撞 401，用户只能手动重连。
+    if (peer.session) peer.session = null
     if (await peer.restore()) return peer
     const record = await this.peerStore.raw(id)
     if (!record?.password) throw new AppError('NEED_PASSWORD', '会话已过期，请重新输入连接密码')

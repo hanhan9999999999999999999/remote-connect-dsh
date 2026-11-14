@@ -14,6 +14,7 @@ const suites = [
   'bridge-dir.mjs',
   'security.mjs',
   'guard.mjs',
+  'peer-session.mjs',
   'docs-guard.mjs',
   'install.mjs',
   'plugin-smoke.mjs',

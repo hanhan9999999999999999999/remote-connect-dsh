@@ -27,6 +27,17 @@ import { packStream } from './pack.mjs'
 
 const BASE = '/dsh-link/v1'
 
+/** 会话还能用吗：留 30 秒余量，避免「以为还有 2 秒」的请求刚好撞在过期边界上。 */
+export function sessionUsable(session, now = Date.now()) {
+  if (!session || !session.token || !session.expiresAt) return false
+  return session.expiresAt > now + 30_000
+}
+
+/** 这个错误码说明对端的会话已经作废，本地缓存必须立刻丢掉。 */
+function isDeadSession(code) {
+  return code === 'UNAUTHORIZED' || code === 'SESSION_EXPIRED'
+}
+
 export class RemotePeer {
   constructor({ record, logger, device }) {
     this.record = record
@@ -83,7 +94,12 @@ export class RemotePeer {
     const options = { ...this.#baseOptions(path), method, headers: { ...headers } }
     return new Promise((resolve, reject) => {
       const req = lib.request(options, (res) => resolve(res))
-      req.on('error', (err) => reject(new AppError('NETWORK', networkMessage(err), { cause: err.code })))
+      req.on('error', (err) => {
+        // 超时是我们自己 destroy 出来的 AppError，别把它压成 NETWORK——
+        // index.js 要靠 TIMEOUT 区分「对端没响应」和「网线断了」。
+        if (err instanceof AppError) reject(err)
+        else reject(new AppError('NETWORK', networkMessage(err), { cause: err.code }))
+      })
       if (timeoutMs) {
         req.setTimeout(timeoutMs, () => req.destroy(new AppError('TIMEOUT', '连接超时')))
       } else {
@@ -134,7 +150,11 @@ export class RemotePeer {
     }
     if (expectOk && (res.statusCode >= 400 || parsed?.error)) {
       const err = parsed?.error ?? {}
-      throw new AppError(err.code ?? `HTTP_${res.statusCode}`, err.message ?? '对端返回错误', err.extra)
+      const code = err.code ?? `HTTP_${res.statusCode}`
+      // 会话过期/未授权：把本地缓存的 session 丢掉，下一次操作才会重新握手，
+      // 否则这个进程会一直拿着一个已经作废的 token 反复撞 401。
+      if (isDeadSession(code) || res.statusCode === 401) this.session = null
+      throw new AppError(code, err.message ?? '对端返回错误', err.extra)
     }
     return parsed
   }
@@ -219,18 +239,20 @@ export class RemotePeer {
   /** Reuse a stored session token if it is still valid. */
   async restore() {
     const r = this.record
-    if (!r.token || !r.sk || !r.expiresAt || r.expiresAt < Date.now() + 30_000) return false
-    this.session = { token: r.token, sk: Buffer.from(r.sk, 'base64'), expiresAt: r.expiresAt }
+    if (!r.token || !r.sk || !r.expiresAt) return false
+    const candidate = { token: r.token, sk: Buffer.from(r.sk, 'base64'), expiresAt: r.expiresAt }
+    if (!sessionUsable(candidate)) return false
+    this.session = candidate
     try {
       await this.requestJson('GET', '/ping', { timeoutMs: 8000 })
       return true
     } catch (err) {
-      if (err.code === 'UNAUTHORIZED' || err.code === 'SESSION_EXPIRED') {
+      if (isDeadSession(err.code)) {
         this.session = null
         return false
       }
-      // Network hiccup: keep the session, let the caller decide.
-      return err.code === 'NETWORK' ? Boolean(this.session) : false
+      // 网络问题（含超时）：会话本身没准还是好的，留给调用方决定。
+      return Boolean(this.session)
     }
   }
 
