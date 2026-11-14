@@ -82,13 +82,25 @@ ok('sanitizeTargets 对非数组不抛', sanitizeTargets(null).length === 0)
 
 // —— 3. 灌包时回复数量有上限
 {
-  // 假设备：收到探测就往回灌 300 条不同 id 的回复
+  // 假设备：收到探测就往回灌一批不同 id 的回复。
+  // 一次灌太多时 loopback 的 UDP 缓冲区会丢包（CI 上实测 300 条只到 221 条），
+  // 所以每轮多灌一些，并且最多重扫几轮——直到真的把 256 个名额填满为止。
+  const PER_ROUND = 800
+  const MAX_ROUNDS = 4
   const flooder = dgram.createSocket('udp4')
   let sent = 0
+  let round = 0
   flooder.on('message', (_msg, rinfo) => {
-    for (let i = 0; i < 300; i += 1) {
+    round += 1
+    for (let i = 0; i < PER_ROUND; i += 1) {
       const reply = Buffer.from(
-        JSON.stringify({ m: 'dsh-link/here', v: 1, id: `peer-${i}`, name: `设备 ${i}`, port: 9000 }),
+        JSON.stringify({
+          m: 'dsh-link/here',
+          v: 1,
+          id: `peer-${round}-${i}`,
+          name: `设备 ${i}`,
+          port: 9000,
+        }),
       )
       flooder.send(reply, rinfo.port, rinfo.address, () => {})
       sent += 1
@@ -97,9 +109,12 @@ ok('sanitizeTargets 对非数组不抛', sanitizeTargets(null).length === 0)
   const floodPort = await freePort()
   await new Promise((resolve) => flooder.bind(floodPort, '127.0.0.1', resolve))
 
-  warns.length = 0
-  const d = new Discovery({ port: floodPort, logger: loud, getInfo: () => ({ id: 'self', name: '本机' }) })
-  const list = await d.scan({ timeoutMs: 600, extraHosts: ['127.0.0.1'] })
+  let list = []
+  for (let attempt = 0; attempt < MAX_ROUNDS && list.length < SCAN_LIMITS.maxPeers; attempt += 1) {
+    warns.length = 0
+    const d = new Discovery({ port: floodPort, logger: loud, getInfo: () => ({ id: 'self', name: '本机' }) })
+    list = await d.scan({ timeoutMs: 600, extraHosts: ['127.0.0.1'] })
+  }
   ok('灌包时收回来的设备不超过上限', list.length === SCAN_LIMITS.maxPeers, `实际 ${list.length} 台`)
   ok('超出上限的回复被丢掉并记了一条警告', warns.some((w) => w.includes('超出上限')), warns.join(' | '))
   ok('确实灌了不少包（否则这条断言不算数）', sent > SCAN_LIMITS.maxPeers, `发了 ${sent} 条`)
