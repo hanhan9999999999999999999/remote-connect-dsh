@@ -29,12 +29,12 @@
       },
       "versions": [
         {
-          "version": "1.0.20",
-          "publishTimestamp": 1794674262,
+          "version": "1.0.21",
+          "publishTimestamp": 1794674664,
           "source": {
             "type": "git",
             "url": "https://github.com/hanhan9999999999999999999/remote-connect-dsh.git",
-            "commit": "40448be433e3d430c67c1f253fd50ce401ea5c2f",
+            "commit": "17751f78482105e29880407fc62ed11cfa06fd1d",
             "path": "plugins/dsh-remote-connect"
           },
           "engines": { "dsh": ">=0.1.0" }
