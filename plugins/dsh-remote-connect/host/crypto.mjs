@@ -97,13 +97,26 @@ export function encryptJson(key, value) {
 
 export function decryptJson(key, envelope) {
   if (!envelope || envelope.e !== 1) throw new Error('无效的加密信封')
-  const iv = Buffer.from(envelope.iv, 'base64')
-  const tag = Buffer.from(envelope.tag, 'base64')
-  const ct = Buffer.from(envelope.ct, 'base64')
+  const iv = Buffer.from(String(envelope.iv ?? ''), 'base64')
+  const tag = Buffer.from(String(envelope.tag ?? ''), 'base64')
+  const ct = Buffer.from(String(envelope.ct ?? ''), 'base64')
+  // 先校验形状再交给 node:crypto：否则坏信封会抛出「Invalid IV length」这类
+  // 面向实现的消息，调用方也只能当成 500。
+  if (iv.length !== 12) throw new Error(`加密信封的 iv 长度不对：${iv.length}（应为 12）`)
+  if (tag.length !== 16) throw new Error(`加密信封的 tag 长度不对：${tag.length}（应为 16）`)
   const decipher = createDecipheriv('aes-256-gcm', key, iv)
   decipher.setAuthTag(tag)
-  const plain = Buffer.concat([decipher.update(ct), decipher.final()])
-  return JSON.parse(plain.toString('utf8'))
+  let plain
+  try {
+    plain = Buffer.concat([decipher.update(ct), decipher.final()])
+  } catch {
+    throw new Error('加密信封校验失败（内容被改动，或两端密钥不一致）')
+  }
+  try {
+    return JSON.parse(plain.toString('utf8'))
+  } catch {
+    throw new Error('加密信封里的内容不是合法 JSON')
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -112,6 +125,9 @@ export function decryptJson(key, envelope) {
 
 const FRAME_MAGIC = Buffer.from('DSHF')
 export const FRAME_CHUNK = 64 * 1024
+/** 单帧上限：64 KB 的明文 + iv + tag 远小于这个数，超出说明对面在乱发。 */
+export const MAX_FRAME = 8 * 1024 * 1024
+const FRAME_MIN = 12 + 16
 
 /**
  * Emits: [4-byte len][payload] where payload = 12B iv + ciphertext + 16B tag.
@@ -129,14 +145,18 @@ export function encodeFrame(key, index, chunk) {
 }
 
 export function decodeFrame(key, index, payload) {
-  if (payload.length < 28) throw new Error('帧长度非法')
+  if (payload.length < FRAME_MIN) throw new Error(`帧长度非法：${payload.length}（至少 ${FRAME_MIN}）`)
   const iv = payload.subarray(0, 12)
   const tag = payload.subarray(payload.length - 16)
   const ct = payload.subarray(12, payload.length - 16)
   const decipher = createDecipheriv('aes-256-gcm', key, iv)
   decipher.setAAD(Buffer.from(`frame|${index}`))
   decipher.setAuthTag(tag)
-  return Buffer.concat([decipher.update(ct), decipher.final()])
+  try {
+    return Buffer.concat([decipher.update(ct), decipher.final()])
+  } catch {
+    throw new Error(`第 ${index} 帧校验失败（内容被改动，或帧顺序不对）`)
+  }
 }
 
 /** Buffering decoder for a framed byte stream. */
@@ -152,7 +172,8 @@ export class FrameDecoder {
     const out = []
     while (this.buf.length >= 4) {
       const len = this.buf.readUInt32BE(0)
-      if (len > 8 * 1024 * 1024) throw new Error('帧过大')
+      if (len > MAX_FRAME) throw new Error(`帧过大：${len} 字节（上限 ${MAX_FRAME}）`)
+      if (len < FRAME_MIN) throw new Error(`帧长度非法：${len}（至少 ${FRAME_MIN}）`)
       if (this.buf.length < 4 + len) break
       const payload = this.buf.subarray(4, 4 + len)
       this.buf = this.buf.subarray(4 + len)

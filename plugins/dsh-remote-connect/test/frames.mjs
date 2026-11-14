@@ -96,7 +96,7 @@ await ok('密文被改动一个字节就解不出来', async () => {
 await ok('帧序号被换掉（重放/乱序）就解不出来', async () => {
   const frame = encodeFrame(key, 5, Buffer.from('out of order'))
   const decoder = new FrameDecoder(key) // 期望序号 0
-  assert.throws(() => decoder.push(frame), /authenticate|Unsupported state|unable to/i)
+  assert.throws(() => decoder.push(frame), /第 0 帧校验失败|authenticate|Unsupported state|unable to/i)
 })
 
 await ok('声明的长度超过上限直接报错', async () => {
