@@ -26,10 +26,14 @@
 
 ```yaml
 dsh-remote-connect:
-  bridgeDir: 'D:/document/Remote Connect DSH/phone-bridge'
+  bridgeDir: '/path/to/phone-bridge'
 ```
 
-优先级：`config.bridgeDir` > `config.dir` > 环境变量 `DSH_PHONE_BRIDGE_DIR` > 上面那个默认值。
+优先级：`config.bridgeDir` > `config.dir` > 环境变量 `DSH_PHONE_BRIDGE_DIR` > 自动探测 > 旧默认路径。
+
+自动探测只认「真的装好了」的目录（里面有 `ensure-running.ps1` 或 `server.mjs`），依次看：
+`$DSH_HOME/phone-bridge`、当前工作目录下的 `phone-bridge`、旧的创作机路径。
+所以把 `phone-bridge/` 放在 DSH 数据目录旁边或启动目录旁边，就不用写配置。
 
 判断「装了没有」只看文件在不在，不看进程：缺 `ensure-running.ps1` 和 `server.mjs` 就报
 「本机还没装手机通道」，并在 `hint` 里给出当前找的路径。

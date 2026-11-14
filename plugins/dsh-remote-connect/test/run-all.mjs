@@ -4,7 +4,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const suites = ['client-smoke.mjs', 'inventory-guard.mjs', 'deps.mjs', 'plugin-smoke.mjs', 'e2e.mjs']
+const suites = ['client-smoke.mjs', 'inventory-guard.mjs', 'deps.mjs', 'bridge-dir.mjs', 'plugin-smoke.mjs', 'e2e.mjs']
 
 for (const file of suites) {
   process.stdout.write(`\n── ${file} ──\n`)

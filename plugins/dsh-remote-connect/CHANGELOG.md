@@ -21,7 +21,10 @@
 ### 新增
 
 - **`bridgeDir` 可配置**：`host/phone.mjs` 里的桥接路径从硬编码常量改成
-  `config.bridgeDir` / `config.dir` / 环境变量 `DSH_PHONE_BRIDGE_DIR` / 默认值四级回落。
+  `config.bridgeDir` / `config.dir` / 环境变量 `DSH_PHONE_BRIDGE_DIR` / **自动探测** / 旧默认路径。
+  自动探测依次认 `$DSH_HOME/phone-bridge`、`./phone-bridge`（只认里面真有
+  `ensure-running.ps1` 或 `server.mjs` 的），所以别人把 `phone-bridge/` 放对位置就不用配置；
+  对应测试 `test/bridge-dir.mjs`。
 - **`installed()` / `installed` 字段**：手机通道页签能区分「没装 phone-bridge」和「装了但没起来」，
   前者给安装提示与它实际找的路径，后者才是错误。
 - **`docs/PHONE.md`**：手机通道的目录要求、配置项、接口、状态字段、怎么停用。

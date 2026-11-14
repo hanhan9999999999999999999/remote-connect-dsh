@@ -30,23 +30,44 @@ export const __test = {
 };
 
 /**
- * 桥接目录不写死。优先级：`configure({ bridgeDir })` > 环境变量 DSH_PHONE_BRIDGE_DIR
- * > 旧默认路径。目录里要有 ensure-running.ps1 与 runtime/；没有就当作「手机通道未安装」，
- * 面板显示怎么装，而不是抛一堆 ENOENT。
+ * 桥接目录不写死。优先级：
+ *   `configure({ bridgeDir })` > 环境变量 `DSH_PHONE_BRIDGE_DIR` > 自动探测 > 旧默认路径。
+ * 自动探测依次看：`$DSH_HOME/phone-bridge`、当前工作目录下的 `phone-bridge`、
+ * 以及 DSH 安装目录旁边的 `phone-bridge`——谁先真的存在就用谁，都不用就落在旧默认路径上，
+ * 面板会显示「还没装手机通道」而不是抛一堆 ENOENT。
  */
-let BRIDGE_DIR = process.env.DSH_PHONE_BRIDGE_DIR || 'D:/document/Remote Connect DSH/phone-bridge';
-let RUNTIME_DIR = path.join(BRIDGE_DIR, 'runtime');
-let PAUSE_FLAG = path.join(RUNTIME_DIR, 'paused.flag');
-let STATE_FILE = path.join(RUNTIME_DIR, 'state.json');
-let PORT_FILE = path.join(RUNTIME_DIR, 'port.json');
-let TUNNEL_FILE = path.join(BRIDGE_DIR, 'tunnel.json');
-let ENSURE_PS1 = path.join(BRIDGE_DIR, 'ensure-running.ps1');
+function probeBridgeDir() {
+  const fromEnv = process.env.DSH_PHONE_BRIDGE_DIR;
+  if (fromEnv && fromEnv.trim()) return path.resolve(fromEnv.trim());
+  const looksInstalled = (dir) => {
+    try {
+      return existsSync(path.join(dir, 'ensure-running.ps1')) || existsSync(path.join(dir, 'server.mjs'));
+    } catch {
+      return false;
+    }
+  };
+  const candidates = [];
+  if (process.env.DSH_HOME) candidates.push(path.join(process.env.DSH_HOME, 'phone-bridge'));
+  candidates.push(path.join(process.cwd(), 'phone-bridge'));
+  const legacy = 'D:/document/Remote Connect DSH/phone-bridge';
+  candidates.push(legacy);
+  for (const dir of candidates) {
+    if (looksInstalled(dir)) return path.resolve(dir);
+  }
+  return path.resolve(candidates[0] ?? legacy);
+}
 
-/** 改桥接目录（插件 config.bridgeDir / DSH_PHONE_BRIDGE_DIR），返回实际生效的路径。 */
-export function configure(options = {}) {
-  const dir = options.bridgeDir || options.dir;
-  if (typeof dir !== 'string' || !dir.trim()) return BRIDGE_DIR;
-  BRIDGE_DIR = path.resolve(dir.trim());
+let BRIDGE_DIR = '';
+let RUNTIME_DIR = '';
+let PAUSE_FLAG = '';
+let STATE_FILE = '';
+let PORT_FILE = '';
+let TUNNEL_FILE = '';
+let ENSURE_PS1 = '';
+
+/** 把内部路径全部指向 dir（configure 与首次探测共用）。 */
+function useDir(dir) {
+  BRIDGE_DIR = path.resolve(dir);
   RUNTIME_DIR = path.join(BRIDGE_DIR, 'runtime');
   PAUSE_FLAG = path.join(RUNTIME_DIR, 'paused.flag');
   STATE_FILE = path.join(RUNTIME_DIR, 'state.json');
@@ -54,6 +75,15 @@ export function configure(options = {}) {
   TUNNEL_FILE = path.join(BRIDGE_DIR, 'tunnel.json');
   ENSURE_PS1 = path.join(BRIDGE_DIR, 'ensure-running.ps1');
   return BRIDGE_DIR;
+}
+
+useDir(probeBridgeDir());
+
+/** 改桥接目录（插件 config.bridgeDir / DSH_PHONE_BRIDGE_DIR），返回实际生效的路径。 */
+export function configure(options = {}) {
+  const dir = options.bridgeDir || options.dir;
+  if (typeof dir !== 'string' || !dir.trim()) return BRIDGE_DIR;
+  return useDir(dir.trim());
 }
 
 /** 当前生效的桥接目录。 */
