@@ -10,6 +10,12 @@ import assert from 'node:assert/strict'
 const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-link-deps-'))
 const dsh = path.join(tmp, 'dsh')
 process.env.DEVICE_LINK_DSH_HOME = dsh
+// 这条用例的依赖是 file:，可 npm 仍会去注册表问一次 audit/fund/元数据——离线机器上
+// 第一次跑就会慢到失败（1.0.23 的干净实装里真踩到过）。把 npm 钉成离线，测试不再依赖网络。
+process.env.npm_config_offline = 'true'
+process.env.npm_config_audit = 'false'
+process.env.npm_config_fund = 'false'
+process.env.npm_config_update_notifier = 'false'
 const plugin = path.join(dsh, 'plugins', 'demo')
 await fs.mkdir(path.join(plugin, 'fixture-dep'), { recursive: true })
 await fs.writeFile(
