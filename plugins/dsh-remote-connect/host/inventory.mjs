@@ -132,7 +132,7 @@ function noteExcluded(ctx, rel, reason) {
   ctx.excludedCount += 1
   const code = EXCLUDE_CODES[reason] ?? 'other'
   ctx.reasonCounts[code] = (ctx.reasonCounts[code] ?? 0) + 1
-  if (ctx.excluded.length < 40) ctx.excluded.push({ rel, reason })
+  if (ctx.excluded.length < 40) ctx.excluded.push({ rel, reason, code })
 }
 
 async function walk(rootAbs, relRoot, ctx, out) {

@@ -122,6 +122,9 @@ window.__ModuleLoader__.load({
       'sync.scanRemote': '预览对端清单',
       'sync.remoteSummary': '{files} 个文件 · {size}',
       'sync.excludedLine': '已按规则跳过 {n} 个文件（{what}）',
+      'sync.excludedShow': '看看是哪些',
+      'sync.excludedHide': '收起',
+      'sync.excludedRest': '还有 {n} 个没列出来（只显示前 40 个）',
       'excl.secret': '凭据/密钥',
       'excl.log': '日志/临时',
       'excl.big': '超大文件',
@@ -292,6 +295,9 @@ window.__ModuleLoader__.load({
       'sync.scanRemote': 'Preview peer inventory',
       'sync.remoteSummary': '{files} files · {size}',
       'sync.excludedLine': 'Skipped {n} files by rule ({what})',
+      'sync.excludedShow': 'Show them',
+      'sync.excludedHide': 'Hide',
+      'sync.excludedRest': '{n} more not listed (first 40 only)',
       'excl.secret': 'secrets',
       'excl.log': 'logs/temp',
       'excl.big': 'too large',
@@ -1183,6 +1189,8 @@ window.__ModuleLoader__.load({
       const [direction, setDirection] = useState('push')
       const [cats, setCats] = useState(() => ({ ...cfg.sync.categories }))
       const [remote, setRemote] = useState(null)
+      // 被跳过的文件明细：默认收起，别把页面撑长；想查具体是哪些再展开
+      const [showExcluded, setShowExcluded] = useState(false)
       const [scanning, setScanning] = useState(false)
       const [starting, setStarting] = useState(false)
       const [task, setTask] = useState(null)
@@ -1346,7 +1354,31 @@ window.__ModuleLoader__.load({
                           .map((r) => (EXCLUDE_LABEL[r] ? t(EXCLUDE_LABEL[r]) : r))
                           .join(' · ')))
                     : null,
+                  remote && (remote.excluded || []).length
+                    ? h(Btn, {
+                        size: 'sm',
+                        onClick: () => setShowExcluded((v) => !v),
+                        'aria-expanded': showExcluded ? 'true' : 'false',
+                      }, showExcluded ? t('sync.excludedHide') : t('sync.excludedShow'))
+                    : null,
                 ),
+                showExcluded && remote && (remote.excluded || []).length
+                  ? h(
+                      'div',
+                      { className: 'dlk-group' },
+                      (remote.excluded || []).map((e) => h(
+                        'div',
+                        { className: 'dlk-row', key: `${e.rel}|${e.reason ?? ''}` },
+                        h('span', { className: 'dlk-mono', style: { flex: '1 1 auto', wordBreak: 'break-all' } }, e.rel),
+                        h('span', { className: 'dlk-hint' },
+                          EXCLUDE_LABEL[e.code] ? t(EXCLUDE_LABEL[e.code]) : (e.reason || '')),
+                      )),
+                      remote.excludedTotal > (remote.excluded || []).length
+                        ? h('span', { className: 'dlk-hint' }, t('sync.excludedRest')
+                            .replace('{n}', String(remote.excludedTotal - (remote.excluded || []).length)))
+                        : null,
+                    )
+                  : null,
                 remote && remote.summary
                   ? h(
                       'div',

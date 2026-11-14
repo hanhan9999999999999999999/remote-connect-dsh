@@ -50,6 +50,10 @@ await ok('排除总数与原因分别统计，不只留 40 条明细', async () 
   assert(inv.excludedReasons.secret === 1, `凭据计数应为 1，实际 ${JSON.stringify(inv.excludedReasons)}`)
   assert(inv.excludedReasons.log === 1, '日志计数应为 1')
   assert(inv.excludedReasons.big === 1, '超大计数应为 1')
+  // 明细里每条都带原因代号，界面才能按当前语言翻译，而不是去匹配中文串
+  for (const ex of inv.excluded) {
+    assert(['secret', 'log', 'big', 'other'].includes(ex.code), `明细缺少可翻译的代号：${JSON.stringify(ex)}`)
+  }
 })
 
 await ok('勾上「包含凭据」之后，凭据那一项从统计里消失', async () => {
