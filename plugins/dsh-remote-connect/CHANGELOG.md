@@ -2,6 +2,17 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.14 — 2026-11-15
+
+### 变更
+
+- `host/discovery.mjs`：新增 `sanitizePeerReply()`——局域网里谁都能往 UDP 端口发包，过去一个回复里 `port: 0`（或字符串）就会变成端口为 `NaN` 的「对端」条目，点连接才发现连不上。现在 `m`/`v` 必须匹配、`id` 非空且截 64 字符、端口必须是 1–65535 的整数、`name`/`platform`/`version` 一律截断，缺字段整条丢掉；`broadcastOf` 也导出以便测试。
+- 探测发包加了保护：非法广播地址（`send` 会同步抛）不再打断整轮扫描。
+
+### 新增
+
+- `test/discovery.mjs`：7 项断言——广播地址计算、`lanBroadcasts()` 全是合法 IPv4、回复字段校验矩阵（含超长截断）、`start()` 只应答合法探测（垃圾包与错误版本号都不理）、`scan()` 从真实回环 UDP 里只收合规条目并丢掉端口非法的那条、非法广播地址不抛错。已进 `run-all`（现 17 个套件）。
+
 ## 1.0.13 — 2026-11-14
 
 1.0.12 在 ubuntu 的 CI 上红了：`safeJoin` 的 Windows 保留名检查（`CON`、`LPT1` 之类）只在 `process.platform === 'win32'` 时生效，而测试无条件断言这些名字必须被拒绝——Linux 上 `CON` 是合法文件名，断言自然失败。
