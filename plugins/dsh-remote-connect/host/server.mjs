@@ -35,6 +35,10 @@ const BASE = '/dsh-link/v1'
 const MAX_JSON = 4 * 1024 * 1024
 const SESSION_TTL = 12 * 60 * 60 * 1000
 const CHALLENGE_TTL = 60 * 1000
+// 空闲（没有数据往来）多久就断开；大文件传输期间一直有数据，不受影响。
+const IDLE_MS = 120 * 1000
+// 同时挂着的连接数上限。这是个给别人连的 P2P 服务，正常人只开几条。
+const MAX_CONNECTIONS = 128
 
 function jsonBody(req, limit = MAX_JSON) {
   return new Promise((resolve, reject) => {
@@ -55,10 +59,14 @@ function jsonBody(req, limit = MAX_JSON) {
 }
 
 export class LinkServer {
-  constructor({ store, logger, onEvent } = {}) {
+  constructor({ store, logger, onEvent, idleMs, maxConnections } = {}) {
     this.store = store
     this.logger = logger
     this.onEvent = onEvent
+    // 大文件同步可能要传很久，所以按「空闲」而不是「总时长」掐：只要还有数据在走就不算超时。
+    this.idleMs = Number.isFinite(idleMs) && idleMs > 0 ? idleMs : IDLE_MS
+    this.maxConnections =
+      Number.isInteger(maxConnections) && maxConnections > 0 ? maxConnections : MAX_CONNECTIONS
     this.http = null
     this.port = null
     this.sessions = new Map()
@@ -104,6 +112,18 @@ export class LinkServer {
     server.requestTimeout = 0
     server.headersTimeout = 60_000
     server.keepAliveTimeout = 65_000
+    server.maxConnections = this.maxConnections
+    // requestTimeout=0 是故意的（大包要传很久），所以用空闲超时兜住「连上来什么都不发」这类占着不放。
+    server.setTimeout(this.idleMs, (socket) => {
+      this.logger?.warn?.('server', `连接空闲超过 ${Math.round(this.idleMs / 1000)} 秒，已断开`)
+      socket.destroy()
+    })
+    server.on('drop', (data) => {
+      this.logger?.warn?.(
+        'server',
+        `连接数已到上限 ${this.maxConnections}，拒绝新连接（${data?.remoteAddress ?? '未知地址'}）`,
+      )
+    })
     server.on('clientError', (_err, socket) => {
       try {
         socket.end('HTTP/1.1 400 Bad Request\r\n\r\n')

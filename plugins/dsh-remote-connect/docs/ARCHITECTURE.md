@@ -203,6 +203,8 @@
 | 流中途失败 | 落地失败（路径越界、哈希不符、超限）或推送被对端提前拒（413/401）时，那条 `res` / `source` 会被 `destroy` 掉——否则对端还在往外传、本地还在把文件读完，socket 一直挂在 agent 池里。解码与解压这两环统一走 `frames.mjs` 的 `decodeFrames()`（收、发两侧共用）；发送侧打包用 `pipeline()` 而不是 `.pipe()`，源文件在打包途中消失会变成一个正常的失败，而不是未捕获异常把进程带走（`test/peer-streams.mjs`、`test/frames.mjs`、`test/pack.mjs`） |
 | 对端半死不活（发完响应头就不动） | 请求侧只负责拿到响应头，读内容在 `#jsonFrom()`：那里盯着 socket 超时的标记，读 body 阶段被掐断报 `TIMEOUT`「对端迟迟没有把内容发完」；半路真断开报 `NETWORK`。以前这两种都会变成裸 `ECONNRESET / aborted`，到路由层认不出错误码就成了 500「服务端坏了」（`test/peer-body.mjs`） |
 | 对端一直往外吐内容 | 单个 JSON 响应上限 64 MB（`peer.maxJsonBytes`），超了立刻 `res.destroy()` 并报 `BAD_RESPONSE`「对端返回的内容超过 N MB，已中止」——`/syncs` 这类接口要是回一份坏数据，不能让它把内存吃光 |
+| 连上来却什么都不发 | `requestTimeout = 0` 是故意的（大包要传很久，不能按总时长掐），换来的是**空闲超时**：连接上 `idleMs`（默认 120 秒）没有任何数据往来就 `socket.destroy()` 并记一条 warn。同步期间一直有数据在走，不会被误杀（`test/server-limits.mjs`） |
+| 连接数被灌满 | `maxConnections`（默认 128）——这是个给对面一两个人连的 P2P 服务，正常人只开几条；到上限时多出来的连接直接被拒，并记一条 warn 带对端地址，而不是让端口把文件句柄耗光（`test/server-limits.mjs`） |
 
 ## 7. 兼容性
 

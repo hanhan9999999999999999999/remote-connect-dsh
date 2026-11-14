@@ -21,6 +21,7 @@ const suites = [
   'peer-session.mjs',
   'peer-reconnect.mjs',
   'peer-body.mjs',
+  'server-limits.mjs',
   'rollback.mjs',
   'apply-guard.mjs',
   'pack-safety.mjs',
