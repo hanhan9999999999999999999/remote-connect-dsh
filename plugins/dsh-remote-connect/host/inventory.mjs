@@ -125,7 +125,20 @@ const EXCLUDE_CODES = {
   '凭据/密钥': 'secret',
   '日志/临时文件': 'log',
   '超过单文件上限': 'big',
+  // 这两种不是「按规则跳过」，而是「读不到」：权限不够、层级太深。
+  // 它们的计入方式与前者一致（进总数、进原因分组、明细也能展开），
+  // 这样界面只需一句话就能说清「有多少东西没进清单、为什么」。
+  '读不了（权限不足）': 'denied',
+  '目录层级太深': 'deep',
 }
+
+/**
+ * 目录递归的深度上限。正常项目不会超过十几层，但目录树是可以被人为
+ * 造到几千层的（或者被某个同步工具造出来），一路递归下去会先撞上
+ * 系统路径长度上限、再撞上调用栈。到了上限就把这一支整体算作「没进清单」，
+ * 而不是让整个分类扫描失败。
+ */
+export const MAX_DEPTH = 64
 
 /** 记一条被排除的文件，列表最多留 40 条（计数不受限）。 */
 function noteExcluded(ctx, rel, reason) {
@@ -135,43 +148,63 @@ function noteExcluded(ctx, rel, reason) {
   if (ctx.excluded.length < 40) ctx.excluded.push({ rel, reason, code })
 }
 
-async function walk(rootAbs, relRoot, ctx, out) {
+async function walk(rootAbs, relRoot, ctx, out, depth = 1) {
+  // 太深的目录不再往下走：路径长度迟早撞上限，递归也会先爆栈。
+  // 这一支整体算作「没进清单」，而不是让整个分类扫描失败。
+  if (depth > MAX_DEPTH) {
+    noteExcluded(ctx, relRoot || '.', '目录层级太深')
+    return
+  }
   let dir
   try {
     dir = await fsp.opendir(rootAbs)
   } catch (err) {
     if (err.code === 'ENOENT') return
-    throw err
+    // 一个读不了的子目录（权限、被别的程序锁住、路径过长）不该拖垮整次扫描：
+    // 记一笔「读不了」，继续扫别的。
+    noteExcluded(ctx, relRoot || '.', '读不了（权限不足）')
+    ctx.unreadable = (ctx.unreadable ?? 0) + 1
+    return
   }
   ctx.dirsScanned += 1
-  for await (const dirent of dir) {
-    const rel = relRoot ? `${relRoot}/${dirent.name}` : dirent.name
-    const abs = path.join(rootAbs, dirent.name)
-    if (dirent.isSymbolicLink()) continue
-    if (dirent.isDirectory()) {
-      if (ALWAYS_EXCLUDE_DIR.has(dirent.name)) continue
-      if (rel === 'storages/session_projcache') continue
-      if (/^\.git/.test(dirent.name)) continue
-      // Never ship our own state: config.json holds the connection password,
-      // peers.json holds session keys, and backups hold everyone's old files.
-      const dirAbs = path.resolve(abs)
-      if (dirAbs === ctx.ownData || dirAbs.startsWith(ctx.ownData + path.sep)) continue
-      await walk(abs, rel, ctx, out)
-      continue
+  try {
+    for await (const dirent of dir) {
+      const rel = relRoot ? `${relRoot}/${dirent.name}` : dirent.name
+      const abs = path.join(rootAbs, dirent.name)
+      if (dirent.isSymbolicLink()) continue
+      if (dirent.isDirectory()) {
+        if (ALWAYS_EXCLUDE_DIR.has(dirent.name)) continue
+        if (rel === 'storages/session_projcache') continue
+        if (/^\.git/.test(dirent.name)) continue
+        // Never ship our own state: config.json holds the connection password,
+        // peers.json holds session keys, and backups hold everyone's old files.
+        const dirAbs = path.resolve(abs)
+        if (dirAbs === ctx.ownData || dirAbs.startsWith(ctx.ownData + path.sep)) continue
+        await walk(abs, rel, ctx, out, depth + 1)
+        continue
+      }
+      if (!dirent.isFile()) continue
+      let stat
+      try {
+        stat = await fsp.stat(abs)
+      } catch {
+        // 列得出来但 stat 不了（刚被删、被锁）——以前是静默跳过，
+        // 于是「清单里少了一个文件」这件事没人知道。
+        noteExcluded(ctx, rel, '读不了（权限不足）')
+        ctx.unreadable = (ctx.unreadable ?? 0) + 1
+        continue
+      }
+      const reason = excludedFile(rel, stat.size, ctx.maxFileBytes, ctx.includeSecrets)
+      if (reason) {
+        noteExcluded(ctx, rel, reason)
+        continue
+      }
+      out.push({ rel, size: stat.size, mtime: Math.round(stat.mtimeMs), mode: stat.mode & 0o777, abs })
     }
-    if (!dirent.isFile()) continue
-    let stat
-    try {
-      stat = await fsp.stat(abs)
-    } catch {
-      continue
-    }
-    const reason = excludedFile(rel, stat.size, ctx.maxFileBytes, ctx.includeSecrets)
-    if (reason) {
-      noteExcluded(ctx, rel, reason)
-      continue
-    }
-    out.push({ rel, size: stat.size, mtime: Math.round(stat.mtimeMs), mode: stat.mode & 0o777, abs })
+  } catch {
+    // 迭代途中出错（目录在扫描过程中被删、权限被改）也只记一笔，不打断整次扫描。
+    noteExcluded(ctx, relRoot || '.', '读不了（权限不足）')
+    ctx.unreadable = (ctx.unreadable ?? 0) + 1
   }
 }
 
