@@ -23,6 +23,7 @@ const suites = [
   'frames.mjs',
   'config.mjs',
   'sync-cancel.mjs',
+  'http-status.mjs',
   'docs-guard.mjs',
   'install.mjs',
   'plugin-smoke.mjs',

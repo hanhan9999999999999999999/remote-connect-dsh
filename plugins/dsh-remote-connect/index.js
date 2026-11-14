@@ -195,13 +195,53 @@ function unavailable(err) {
   }
 }
 
-function statusFor(code) {
-  if (code === 'BAD_PASSWORD' || code === 'LOCKED_OUT') return 401
-  if (code === 'NOT_CONNECTED' || code === 'NEED_PASSWORD' || code === 'NO_PASSWORD') return 409
-  if (code === 'PEER_UNKNOWN' || code === 'TASK_UNKNOWN') return 404
-  if (code === 'NO_HOST' || code === 'METHOD' || code === 'BAD_INPUT') return 400
-  if (code === 'NETWORK' || code === 'TIMEOUT' || code === 'NOT_DSH_LINK') return 502
-  return 500
+// 错误码 → HTTP 状态码。写死一张表，别的模块新加错误码时默认 500（并且会带可读 message），
+// 不会因为漏了一个分支就把「内容太大」这种可操作的事说成 500。
+const STATUS = {
+  // 认证
+  BAD_PASSWORD: 401,
+  LOCKED_OUT: 401,
+  UNAUTHORIZED: 401,
+  SESSION_EXPIRED: 401,
+  // 权限 / 密钥不符
+  KEY_MISMATCH: 403,
+  // 找不到
+  PEER_UNKNOWN: 404,
+  TASK_UNKNOWN: 404,
+  SYNC_UNKNOWN: 404,
+  // 状态冲突（做不了，但不是参数错）
+  NOT_CONNECTED: 409,
+  NEED_PASSWORD: 409,
+  NO_PASSWORD: 409,
+  PORT_IN_USE: 409,
+  SYNC_BUSY: 409,
+  NO_JOURNAL: 409,
+  ALREADY_ROLLED_BACK: 409,
+  // 参数 / 内容不对
+  BAD_INPUT: 400,
+  BAD_JSON: 400,
+  NO_HOST: 400,
+  METHOD: 400,
+  CATEGORY: 400,
+  EMPTY: 400,
+  BAD_PLUGIN_ID: 400,
+  PATH_ESCAPE: 400,
+  VERSION_MISMATCH: 400,
+  // 太大
+  TOO_LARGE: 413,
+  BODY_TOO_LARGE: 413,
+  // 对端的问题（网关类）
+  NETWORK: 502,
+  TIMEOUT: 502,
+  NOT_DSH_LINK: 502,
+  BAD_RESPONSE: 502,
+  BAD_ENVELOPE: 502,
+  PHONE_BAD_RESPONSE: 502,
+  NO_PORT: 502,
+}
+
+export function statusFor(code) {
+  return STATUS[code] ?? 500
 }
 
 function send(res, code, obj) {

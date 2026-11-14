@@ -152,6 +152,22 @@
 手机通道自己还注册了 5 条 `/dsh-phone-api/*`（`status`、`start`、`stop`、`port`、`paircode`），
 供桥接侧和调试脚本直接调用。
 
+### 5.3 错误码 → HTTP 状态码
+
+`index.js` 里有一张固定的映射表（`STATUS`），没登记的错误码一律 500——但响应体里一定带可读的 `error.message`。
+分成五类，界面据此决定是「让你改点什么」还是「这像是坏了」：
+
+| 状态码 | 错误码 | 含义 |
+| --- | --- | --- |
+| 401 | `BAD_PASSWORD` `LOCKED_OUT` `UNAUTHORIZED` `SESSION_EXPIRED` | 密码不对 / 被锁 / 会话失效 |
+| 403 | `KEY_MISMATCH` | 两边的会话密钥对不上（多半是改过密码） |
+| 404 | `PEER_UNKNOWN` `TASK_UNKNOWN` `SYNC_UNKNOWN` | 找不到这个对端 / 任务 / 批次 |
+| 409 | `NOT_CONNECTED` `NEED_PASSWORD` `NO_PASSWORD` `PORT_IN_USE` `SYNC_BUSY` `NO_JOURNAL` `ALREADY_ROLLED_BACK` | 现在做不了，但不是参数错 |
+| 400 | `BAD_INPUT` `BAD_JSON` `NO_HOST` `METHOD` `CATEGORY` `EMPTY` `BAD_PLUGIN_ID` `PATH_ESCAPE` `VERSION_MISMATCH` | 参数或内容不对 |
+| 413 | `TOO_LARGE` `BODY_TOO_LARGE` | 内容/请求体超过上限（同步页可以改「同步上限」或分批） |
+| 502 | `NETWORK` `TIMEOUT` `NOT_DSH_LINK` `BAD_RESPONSE` `BAD_ENVELOPE` `PHONE_BAD_RESPONSE` `NO_PORT` | 对端的问题，本机没坏 |
+| 500 | 其余（`READ_FAILED` `CONFIG_BROKEN` `CONFIG_UNREADABLE` `BACKUP_FAILED` `HASH_MISMATCH` …） | 本地故障，需要看日志 |
+
 ## 6. 失败与恢复
 
 **同步任务的状态**只有一条出口（`service.mjs` 的 `#settle`），不会出现「既取消了又失败」这种两副面孔：
