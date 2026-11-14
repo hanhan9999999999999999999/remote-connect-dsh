@@ -35,6 +35,8 @@ export const __test = {
   portStatusFor,
   killPid,
   switchPort,
+  snapshot,
+  detectBridgePort,
 };
 
 /**
@@ -287,9 +289,63 @@ function runEnsureScript() {
   });
 }
 
-async function snapshot() {
-  const port = bridgePort();
-  const h = await health(3000, port);
+/**
+ * 记录与实际不一致时，从监听表里认出「我的桥接到底在哪个端口」。
+ *
+ * 为什么会不一致：端口被占后自动顺延，但 `runtime/port.json` 有可能没写进去
+ * （目录只读、磁盘满），于是桥接在 8900 跑着、记录还指 8899。这时如果只信记录，
+ * 面板会一口咬定「没运行」，主人怎么点都点不明白。
+ *
+ * `rows` 是 `[{ port, cmdline }]`，纯函数，方便直接喂假数据断言。
+ */
+export function pickActualPort(rows, recorded) {
+  const skip = Number(recorded) || 0;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const port = Number(row && row.port);
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) continue;
+    if (port === skip) continue;
+    if (isBridgeCmd(row && row.cmdline)) return port;
+  }
+  return 0;
+}
+
+/** 探最多 4 个监听进程，认出端口记错时桥接真正在的那个端口；认不出返回 0。 */
+async function detectBridgePort(recorded, deps = {}) {
+  const listenersOf = deps.netstatListeners ?? netstatListeners;
+  const infoOf = deps.procInfo ?? procInfo;
+  const map = await listenersOf();
+  const rows = [];
+  let budget = 4;
+  for (const [port, pids] of map) {
+    if (Number(port) === Number(recorded)) continue;
+    for (const pid of pids) {
+      if (budget-- <= 0) return pickActualPort(rows, recorded);
+      const info = await infoOf(pid);
+      rows.push({ port: Number(port), cmdline: info && info.cmdline ? info.cmdline : '' });
+    }
+  }
+  return pickActualPort(rows, recorded);
+}
+
+async function snapshot(deps = {}) {
+  const healthFn = deps.health ?? health;
+  const detectFn = deps.detectBridgePort ?? detectBridgePort;
+  const recorded = bridgePort();
+  let port = recorded;
+  let portMismatch = false;
+  let h = await healthFn(3000, port);
+  if (!h) {
+    // 记录说这里，但可能只是记录过期了——去监听表里问一句「桥接其实在哪个端口」
+    const found = await detectFn(recorded);
+    if (found) {
+      const h2 = await healthFn(1500, found);
+      if (h2) {
+        port = found;
+        h = h2;
+        portMismatch = true;
+      }
+    }
+  }
   const pid = h ? await listenerPid(port) : null;
   const tunnel = readJsonFile(TUNNEL_FILE) || {};
   const st = readJsonFile(STATE_FILE) || {};
@@ -317,6 +373,8 @@ async function snapshot() {
     bridgeDir: BRIDGE_DIR,
     installed: installed(),
     port,
+    recordedPort: recorded,
+    portMismatch,
     running: !!h,
     pid: pid || null,
     paused: existsSync(PAUSE_FLAG),
@@ -402,7 +460,19 @@ async function startBridge(opts = {}) {
  *                    让面板能明确告诉主人「端口从 8899 变成 8900 了，手机要换地址」；
  *                    autoPort:false 则原样报错，把占用者信息一起带回去。
  */
-async function startBridgeOnce(opts = {}) {
+async function startBridgeOnce(opts = {}, deps = {}) {
+  // deps 只为测试注入，生产调用一律走默认实现
+  const healthFn = deps.health ?? health;
+  const clearFn = deps.clearStale ?? clearStale;
+  const pickFn = deps.pickFreePort ?? pickFreePort;
+  const listenerFn = deps.listenerPid ?? listenerPid;
+  const killFn = deps.killPid ?? killPid;
+  const writePort = deps.writePortJson ?? writePortJson;
+  const spawnFn = deps.spawnBridgeDirect ?? spawnBridgeDirect;
+  const ensureFn = deps.runEnsureScript ?? runEnsureScript;
+  const sleepFn = deps.sleep ?? sleep;
+  const portOf = deps.bridgePort ?? bridgePort;
+
   if (existsSync(PAUSE_FLAG)) {
     try {
       unlinkSync(PAUSE_FLAG);
@@ -411,14 +481,17 @@ async function startBridgeOnce(opts = {}) {
     }
   }
   const t0 = Date.now();
-  const wantPort = Number(opts.port) || bridgePort();
+  const wantPort = Number(opts.port) || portOf();
   let port = wantPort;
+  // 端口被占、自动顺延之后，记录有没有真的改过来——没改的话面板得如实说，
+  // 否则桥接在 8900 跑着、port.json 还指 8899，下次启动又搬回去。
+  let portWriteFailed = false;
 
-  if (await health(1200, port)) return { started: true, waitedMs: 0, port, portChanged: false, fromPort: wantPort };
+  if (await healthFn(1200, port)) return { started: true, waitedMs: 0, port, portChanged: false, fromPort: wantPort };
 
-  let probe = await clearStale(port);
+  let probe = await clearFn(port);
   if (probe.state === 'foreign') {
-    const alt = await pickFreePort(port === 8899 ? 8900 : port + 1);
+    const alt = await pickFn(port === 8899 ? 8900 : port + 1);
     const info = {
       port,
       pid: probe.pid,
@@ -439,21 +512,21 @@ async function startBridgeOnce(opts = {}) {
   // 换端口这件事必须先落盘：守护脚本、隧道、下次启动都靠 port.json 找过来
   if (port !== wantPort) {
     // 同一份 state.json 撑不起两个桥接进程：老端口上要是还站着自己那个，先请它下来
-    const oldPid = await listenerPid(wantPort);
+    const oldPid = await listenerFn(wantPort);
     if (oldPid) {
-      await killPid(oldPid);
-      await sleep(600);
+      await killFn(oldPid);
+      await sleepFn(600);
       invalidateNetstat();
     }
-    writePortJson(port);
+    portWriteFailed = !writePort(port);
   }
 
-  const direct = await spawnBridgeDirect(port);
+  const direct = await spawnFn(port);
   let how = direct.ok ? 'direct' : 'ensure';
-  if (!direct.ok) await Promise.race([runEnsureScript(), sleep(6000)]);
+  if (!direct.ok) await Promise.race([ensureFn(), sleepFn(6000)]);
   // 首屏体验优先：最多等 8 秒就先把「启动中」返给面板，剩下的交给前端 5 秒轮询。
   while (Date.now() - t0 < 8000) {
-    if (await health(1200, port)) {
+    if (await healthFn(1200, port)) {
       return {
         started: true,
         waitedMs: Date.now() - t0,
@@ -462,9 +535,15 @@ async function startBridgeOnce(opts = {}) {
         port,
         fromPort: wantPort,
         portChanged: port !== wantPort,
+        ...(portWriteFailed
+          ? {
+              portWriteFailed: true,
+              warning: `已经在 ${port} 端口起来了，但写不进 runtime/port.json —— 下次启动可能又回到 ${wantPort}，面板上的端口等重启后要重新对一次`,
+            }
+          : {}),
       };
     }
-    await sleep(400);
+    await sleepFn(400);
   }
   return {
     started: false,
@@ -474,6 +553,7 @@ async function startBridgeOnce(opts = {}) {
     port,
     fromPort: wantPort,
     portChanged: port !== wantPort,
+    ...(portWriteFailed ? { portWriteFailed: true } : {}),
   };
 }
 

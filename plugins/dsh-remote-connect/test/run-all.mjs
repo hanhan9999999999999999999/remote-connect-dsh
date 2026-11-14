@@ -50,6 +50,7 @@ const suites = [
   'plugin-smoke.mjs',
   'phone-http.mjs',
   'phone-switch.mjs',
+  'phone-port-sync.mjs',
   'e2e.mjs',
 ]
 

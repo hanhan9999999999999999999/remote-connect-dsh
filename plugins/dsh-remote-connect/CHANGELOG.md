@@ -2,6 +2,17 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.51 — 2026-11-15
+
+### 修复
+
+- **端口顺延后记录没写成，界面上就"没运行"**：`startBridgeOnce()` 里 `writePortJson(port)` 的返回值以前没人看。端口被占、自动顺延到 8900 之后，如果 `runtime/port.json` 写不进去（目录只读、磁盘满），桥接其实在 8900 好好跑着，而按记录读到的还是 8899 —— 面板一口咬定「未运行」，用户怎么点都点不明白。现在顺延没写成时返回 `portWriteFailed: true` 与一句 `warning`（「已经在 8900 起来了，但记录没写成，下次启动可能又回到 8899」），界面按警告弹出。
+- **状态只信记录**：`snapshot()` 以前只看 `port.json` 那个端口。现在问不到服务时会去监听表里认「命令行像 `server.mjs` 的那个进程」（最多探 4 个，避免狂起 powershell），认出来就如实报真实端口并标 `portMismatch: true`、同时给出 `recordedPort`；认不出来才报未运行。界面在端口那一行上方显示「记录里是 8899，实际在 8900 跑着」。
+
+### 新增
+
+- `test/phone-port-sync.mjs`（7 项断言）：顺延且写成功不报失败；顺延但写失败必须如实报并给出可读 warning（同时说明现在在哪、下次可能回哪）；`autoPort:false` 时端口冲突原样报错、不启动；`pickActualPort()` 只认命令行像桥接且不是记录里那个端口的监听，认不出返回 0 且对非数组输入不抛；`detectBridgePort()` 认得出来；`snapshot()` 记录过期但服务真在别的端口时报真实端口 + `portMismatch`；认不出来时仍报未运行。`startBridgeOnce(opts, deps)` 与 `snapshot(deps)` 的依赖注入只为测试存在，生产调用走默认实现。
+
 ## 1.0.50 — 2026-11-15
 
 ### 修复

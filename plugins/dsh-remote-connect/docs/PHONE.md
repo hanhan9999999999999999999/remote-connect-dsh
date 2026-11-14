@@ -63,6 +63,8 @@ dsh-remote-connect:
   "bridgeDir": "...",
   "installed": true,
   "port": 9890,
+  "recordedPort": 9890,
+  "portMismatch": false,
   "running": true,
   "pid": 12345,
   "paused": false,
@@ -74,6 +76,10 @@ dsh-remote-connect:
 ```
 
 `installed: false` 表示这台机器上还没有 `phone-bridge`，前端会显示安装提示而不是报错。
+
+**`port` 与 `recordedPort` 不一定相同**：`recordedPort` 是 `runtime/port.json` 里记的那个，`port` 是实际确认在服务的那个。端口被占、自动顺延之后如果记录没写成（目录只读、磁盘满），两者就会对不上——这时 `portMismatch: true`，`port` 取的是从监听表里认出来的真实端口（命令行像 `server.mjs` 的那个进程），界面会直接说明「记录里是 8899，实际在 8900 跑着」。认不出来时按记录报「未运行」，不假装有服务。
+
+`/start` 的返回里，顺延成功但记录没写成时会带 `portWriteFailed: true` 与一句 `warning`，界面把它当警告弹出来（「已经在 8900 起来了，但记录没写成，下次启动可能又回到 8899」），而不是静悄悄当成功。
 
 ## 停用
 

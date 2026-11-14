@@ -168,6 +168,8 @@ window.__ModuleLoader__.load({
       'phone.start': '启动',
       'phone.stop': '停止',
       'phone.hint': '手机与电脑连同一个 Wi-Fi，在手机 App 里填入上面的地址与配对码',
+  'phone.portMismatch': '端口记录里是 {rec}，实际在 {got} 跑着（记录可能没写成，重启后要重新对一次）',
+  'phone.portWriteWarn': '已经在 {port} 端口起来了，但端口记录没写成，下次启动可能又回到 {from}',
       'phone.paused': '已被手动暂停',
       'diag.title': '诊断',
       'diag.desc': '排查连接、目录与权限问题',
@@ -341,6 +343,8 @@ window.__ModuleLoader__.load({
       'phone.start': 'Start',
       'phone.stop': 'Stop',
       'phone.hint': 'Keep the phone on the same Wi-Fi and enter the address and pair code in the app',
+  'phone.portMismatch': 'Recorded port is {rec}, but it is actually running on {got} (the record may not have been saved — check again after a restart)',
+  'phone.portWriteWarn': 'Started on port {port}, but the port record was not saved — the next start may fall back to {from}',
       'phone.paused': 'Manually paused',
       'diag.title': 'Diagnostics',
       'diag.desc': 'Check connectivity, paths and permissions',
@@ -431,6 +435,7 @@ window.__ModuleLoader__.load({
 .dlk-toast{position:sticky;bottom:0;align-self:flex-start;padding:6px 11px;border-radius:8px;font-size:12px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);box-shadow:0 4px 16px rgba(0,0,0,.12)}
 .dlk-toast[data-tone=error]{color:var(--dsw-alias-state-error-primary,#f85149);border-color:color-mix(in srgb,var(--dsw-alias-state-error-primary,#f85149) 45%,transparent)}
 .dlk-toast[data-tone=ok]{color:var(--dsw-alias-state-success-primary,#3fb950)}
+.dlk-toast[data-tone=warn]{color:var(--dsw-alias-state-warning-primary,#d29922);border-color:color-mix(in srgb,var(--dsw-alias-state-warning-primary,#d29922) 45%,transparent)}
 .dlk-spin{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--dsw-alias-border-l2);border-top-color:var(--dsw-alias-label-primary);animation:dlk-rot .8s linear infinite;display:inline-block}
 @keyframes dlk-rot{to{transform:rotate(360deg)}}
 .dlk-scroll{max-height:280px;overflow:auto;display:flex;flex-direction:column;gap:6px;padding-right:2px}
@@ -1479,6 +1484,9 @@ window.__ModuleLoader__.load({
         try {
           const r = await api(path, 'POST', {})
           setPhone(r)
+          // 端口顺延后记录没写成：服务是起来了，但必须马上告诉人，别等下次重启才发现对不上
+          if (r && r.portWriteFailed) notify(t('phone.portWriteWarn', { port: r.port, from: r.fromPort }), 'warn')
+          else if (r && r.portMismatch) notify(t('phone.portMismatch', { rec: r.recordedPort, got: r.port }), 'warn')
         } catch (e) {
           notify(e.message, 'error')
         } finally {
@@ -1506,6 +1514,10 @@ window.__ModuleLoader__.load({
             ),
           },
           phone.error ? h('div', { className: 'dlk-hint', style: { color: 'var(--dsw-alias-state-error-primary,#f85149)' } }, phone.error) : null,
+          phone.portMismatch
+            ? h('div', { className: 'dlk-hint', style: { color: 'var(--dsw-alias-state-warning-primary,#d29922)' } },
+                t('phone.portMismatch', { rec: phone.recordedPort, got: phone.port }))
+            : null,
           h(KV, { k: t('phone.port') }, phone.port || '—'),
           phone.recommended ? h(KV, { k: t('phone.recommended') }, h('span', { className: 'dlk-mono' }, phone.recommended)) : null,
           phone.pairCode
