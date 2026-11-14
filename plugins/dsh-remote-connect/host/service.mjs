@@ -485,6 +485,11 @@ export class LinkService {
   /* diagnostics                                                      */
   /* ---------------------------------------------------------------- */
 
+  /** 磁盘余量探测：抽成方法，路径选择只有一处，测试也能替换掉真实磁盘。 */
+  async freeSpaceAt(dir) {
+    return await freeSpace(dir)
+  }
+
   async diagnostics() {
     await this.init()
     const cfg = await this.store.get()
@@ -517,8 +522,15 @@ export class LinkService {
     add('profiles', 'DSH Profile', profiles.length ? 'ok' : 'warn', profiles.map((p) => p.name).join('，'))
     const udpOk = this.server.discovery ? true : false
     add('discovery', '局域网发现', udpOk ? 'ok' : 'warn', udpOk ? 'UDP 已监听' : '未启用（不影响手动连接）')
-    const free = await freeSpace(os.homedir())
-    add('disk', '可用磁盘', free == null ? 'warn' : free > 2 * 1024 ** 3 ? 'ok' : 'warn', free == null ? '未知' : humanBytes(free))
+    // 同步写的是 DSH 数据目录，不是用户主目录——两者常常根本不在同一块盘上（本机就是 C: 与 D:）。
+    // 看错盘会让用户以为还有空间，实际在下一个大文件上失败。
+    const free = await this.freeSpaceAt(dshHome())
+    add(
+      'disk',
+      '可用磁盘',
+      free == null ? 'warn' : free > 2 * 1024 ** 3 ? 'ok' : 'warn',
+      free == null ? `未知（${dshHome()}）` : `${humanBytes(free)} 可用（${dshHome()}）`,
+    )
     add('password', '连接密码', cfg.auth.password ? 'ok' : 'fail', cfg.auth.password ? '已设置' : '未设置')
     return {
       checks,

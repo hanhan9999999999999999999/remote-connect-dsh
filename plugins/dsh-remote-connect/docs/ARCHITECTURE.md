@@ -187,7 +187,7 @@
 | 对端离线 | 会话令牌 12 小时过期，之后要重新握手；设置页每 6 秒拉一次状态，连不上就显示不可达（不做后台自动重连） |
 | 传输中断 | 接收端在 `<data>/syncs/<syncId>/` 留 `staging/` 与逐条 `journal.jsonl`；**没有断点续传**，重连后重新发起一次同步 |
 | 应用中断 | 只有正常收尾才写 `journal.json`；只写到一半的批次在 `local/syncs` 里标成 incomplete，回滚时退回 `journal.jsonl`（结果带 `partial: true`），临时文件会在失败收尾时清掉 |
-| 磁盘不足 | `/diagnostics` 的 `disk` 项报可用空间（< 2 GB 标 warn），只提示、不阻断同步 |
+| 磁盘不足 | `/diagnostics` 的 `disk` 项报 **DSH 数据目录所在那块盘**的可用空间（< 2 GB 标 warn），只提示、不阻断同步；看的是同步真正写入的盘，不是用户主目录 |
 
 ## 7. 兼容性
 

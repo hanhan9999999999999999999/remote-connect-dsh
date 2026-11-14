@@ -63,11 +63,21 @@ node test/run-all.mjs          # 必须全绿：client-smoke / inventory-guard /
    git add -A; git commit -m "dsh-remote-connect x.y.z: ..."; git rev-parse HEAD
    ```
 
-3. 用这个 SHA 更新 `index.json` 的 `plugins[0].versions[0].source.commit`、
-   `version`、`publishTimestamp`（**秒级整数**），**再单独提交一次索引**。
+3. 用这个 SHA 更新索引，**再单独提交一次索引**：
+
+   ```powershell
+   node tools/pin-index.mjs --version x.y.z --commit <40 位 SHA>
+   node tools/validate-index.mjs
+   ```
+
    两次提交是必要的：索引要指向源码那个提交，不能指向包含它自己的提交。
 
-4. 写 JSON **必须无 BOM**：
+   `tools/pin-index.mjs` 会：改 `plugins[i].versions[0]` 的 `version` / `source.commit` /
+   `publishTimestamp`（秒级整数，取 `[DateTimeOffset]::UtcNow`，别用 `Get-Date -UFormat %s`，
+   那个把本地时间当 UTC、会多 8 小时）；按固定缩进 + **LF** 写回；顺手查 BOM、包名、40 位 hex。
+
+4. 写 JSON **必须无 BOM**，也用**不能是 CRLF**（仓库 `.gitattributes` 是 `eol=lf`，
+   否则每次发版都在索引上多出几十行假改动——`ConvertTo-Json` + `WriteAllText` 就干过这事）：
 
    ```powershell
    [IO.File]::WriteAllText($p, $txt, (New-Object System.Text.UTF8Encoding($false)))

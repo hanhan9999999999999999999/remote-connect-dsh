@@ -25,6 +25,7 @@ const suites = [
   'config.mjs',
   'sync-cancel.mjs',
   'sync-progress.mjs',
+  'diagnostics.mjs',
   'http-status.mjs',
   'peers.mjs',
   'docs-guard.mjs',
