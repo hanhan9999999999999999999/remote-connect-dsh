@@ -15,6 +15,8 @@ import { dshHome } from './config.mjs'
 import { AppError, ensureDir, rid, safeJoin, writeJson } from './util.mjs'
 
 const JOURNAL_VERSION = 1
+/** 内存里最多保留多少个批次状态（再老的只留在磁盘上的 syncs/ 里） */
+const MAX_STATES = 20
 
 
 export class Applier {
@@ -28,6 +30,21 @@ export class Applier {
 
   #dir(syncId) {
     return path.join(this.dataHome, 'syncs', syncId)
+  }
+
+  /**
+   * 内存里的批次状态只留最近这些条：DSH 一开就是几天，每同步一次就多一个 state，
+   * 以前这个 Map 只进不出，跑到几百次同步就一直挂着。
+   */
+  #trimStates(max = MAX_STATES) {
+    if (this.syncs.size <= max) return
+    const finished = [...this.syncs.values()]
+      .filter((s) => s.phase === 'done' || s.phase === 'failed')
+      .sort((a, b) => (a.finishedAt ?? a.createdAt) - (b.finishedAt ?? b.createdAt))
+    for (const state of finished) {
+      if (this.syncs.size <= max) break
+      this.syncs.delete(state.id)
+    }
   }
 
   async prepare({ from, meta = {} } = {}) {
@@ -52,6 +69,7 @@ export class Applier {
       dir,
     }
     this.syncs.set(syncId, state)
+    this.#trimStates()
     await writeJson(path.join(dir, 'meta.json'), {
       version: JOURNAL_VERSION,
       id: syncId,
@@ -189,7 +207,15 @@ export class Applier {
             throw new AppError('SIZE_MISMATCH', `大小不符：${meta.rel}`, { expected: meta.size, actual: written })
           }
           if (meta.op === 'merge-profile') {
-            await mergeProfileJson(tmp, abs)
+            // 对端发来的 profile 不是合法 JSON 时，宁可不写也不能把本机的 profile 覆盖成坏文件
+            const merged = await mergeProfileJson(tmp, abs)
+            if (!merged) {
+              await fsp.rm(tmp, { force: true })
+              tmpFiles.delete(tmp)
+              state.skipped += 1
+              this.logger?.warn('apply', `对端的 profile 不是合法 JSON，跳过合并：${meta.rel}`)
+              return
+            }
           }
           await fsp.rename(tmp, abs)
           tmpFiles.delete(tmp)
@@ -313,6 +339,9 @@ export class Applier {
     const entries = [...journal.entries].reverse()
     let restored = 0
     let removed = 0
+    // 备份目录按 backupKeep 轮转，老批次的备份可能已经没了。
+    // 以前这种情况被当成「恢复失败」默默吞掉，回滚却报成功——文件还停在新内容上，用户以为撤回了。
+    let missing = 0
     for (const entry of entries) {
       const abs = safeJoin(root, entry.rel)
       if (entry.backup) {
@@ -322,7 +351,12 @@ export class Applier {
           await fsp.copyFile(backupAbs, abs)
           restored += 1
         } catch (err) {
-          this.logger?.warn('rollback', `恢复失败 ${entry.rel}`, { error: String(err) })
+          if (err?.code === 'ENOENT') {
+            missing += 1
+            this.logger?.warn('rollback', `备份已被轮转清掉，无法还原：${entry.rel}`)
+          } else {
+            this.logger?.warn('rollback', `恢复失败 ${entry.rel}`, { error: String(err) })
+          }
         }
       } else {
         try {
@@ -334,10 +368,10 @@ export class Applier {
       }
     }
     journal.rolledBackAt = Date.now()
-    journal.rollback = { restored, removed, partial }
+    journal.rollback = { restored, removed, partial, missing }
     await writeJson(journalPath, journal)
-    this.onEvent?.({ type: 'rollback', syncId, restored, removed, partial })
-    return { syncId, restored, removed, partial }
+    this.onEvent?.({ type: 'rollback', syncId, restored, removed, partial, missing })
+    return { syncId, restored, removed, partial, missing }
   }
 }
 
@@ -379,8 +413,10 @@ async function mergeProfileJson(tmpFile, target) {
   try {
     incoming = JSON.parse(await fsp.readFile(tmpFile, 'utf8'))
   } catch {
-    return
+    // 解析不出来就别往下写：写下去等于用法本机的 profile 换一份坏文件
+    return false
   }
+  if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return false
   let local = {}
   try {
     local = JSON.parse(await fsp.readFile(target, 'utf8'))
@@ -391,6 +427,8 @@ async function mergeProfileJson(tmpFile, target) {
     ...local,
     ...incoming,
     name: local.name ?? incoming.name,
+    // private 也属于「这台机器自己的身份」：对端把 profile 打包成可发布的，不该顺手把接收方也变成可发布
+    private: local.private ?? incoming.private,
     dependencies: { ...(local.dependencies ?? {}), ...(incoming.dependencies ?? {}) },
     dsh: {
       ...(local.dsh ?? {}),
@@ -408,6 +446,7 @@ async function mergeProfileJson(tmpFile, target) {
     },
   }
   await fsp.writeFile(tmpFile, JSON.stringify(merged, null, 2))
+  return true
 }
 
 async function pruneBackups(dataHome, keep) {

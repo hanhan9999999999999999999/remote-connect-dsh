@@ -122,8 +122,31 @@ await ok('没有任何记录时抛 NO_JOURNAL', async () => {
   await assert.rejects(() => applier().rollback('s_none'), (err) => err.code === 'NO_JOURNAL')
 })
 
+/* 5. 备份已经被备份轮转清掉：不许假装回滚成功 */
+await ok('备份被轮转清掉时回报 missing，而不是当作已还原', async () => {
+  const syncId = 's_missing'
+  const dir = path.join(dataHome, 'syncs', syncId)
+  await fsp.mkdir(dir, { recursive: true })
+  await write('config/settings.json', '同步后的新内容')
+  // journal 里写着有备份，但 backups/<syncId>/ 早被 pruneBackups 删了
+  await fsp.writeFile(
+    path.join(dir, 'journal.json'),
+    JSON.stringify({
+      id: syncId,
+      entries: [{ rel: 'config/settings.json', reason: 'replaced', backup: `backups/${syncId}/config/settings.json` }],
+    }),
+  )
+
+  const out = await applier().rollback(syncId)
+  assert.equal(out.restored, 0, '备份不在就不能算还原')
+  assert.equal(out.missing, 1, '要找得到「备份没了」这件事')
+  assert.equal(read('config/settings.json'), '同步后的新内容', '内容保持原样，没有假装成功')
+  const journal = JSON.parse(fs.readFileSync(path.join(dir, 'journal.json'), 'utf8'))
+  assert.equal(journal.rollback.missing, 1, 'journal 里也要记下来')
+})
+
 await fsp.rm(dshHome, { recursive: true, force: true }).catch(() => {})
 await fsp.rm(dataHome, { recursive: true, force: true }).catch(() => {})
 
-console.log(`rollback ok · ${pass} 项断言 · 正常批次 / 半途失败 / 重复回滚 / 无记录（${pass} 通过、${fail} 失败）`)
+console.log(`rollback ok · ${pass} 项断言 · 正常批次 / 半途失败 / 重复回滚 / 无记录 / 备份被清（${pass} 通过、${fail} 失败）`)
 if (fail) process.exit(1)

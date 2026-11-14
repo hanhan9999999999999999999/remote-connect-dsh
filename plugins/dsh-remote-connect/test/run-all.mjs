@@ -18,6 +18,7 @@ const suites = [
   'guard.mjs',
   'peer-session.mjs',
   'rollback.mjs',
+  'apply-guard.mjs',
   'pack-safety.mjs',
   'discovery.mjs',
   'pack.mjs',

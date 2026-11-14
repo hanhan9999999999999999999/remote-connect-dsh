@@ -104,6 +104,9 @@
 - 目录/文件权限沿用，Windows 上忽略 mode；
 - 应用完成写 `journal.json`，`rollback` 可按反向顺序还原（仅本次同步涉及的文件）。
 - 半途失败的批次没有 `journal.json`，但 `journal.jsonl` 是逐行落盘的，`rollback` 会退回用它还原，并在结果里标 `partial: true`，同时补写一份 `journal.json`（避免下次又被当成半成品）。
+- 回滚时若某条目的备份已被 `backupKeep` 轮转清掉，结果里 `missing` 会计数（`journal.rollback.missing` 同步记下）——不会再把「没还原成」说成还原了。
+- 对端发来的 `profiles/*/package.json`（`op: merge-profile`）如果不是合法 JSON 对象，整条跳过并计入 `skipped`：本机的 profile 不会被替换成坏文件。合并时只采纳 `dependencies` 与 `dsh.profile.bundles`，`name` 与 `private` 保持本机自己的。
+- 内存里的批次状态最多留 20 条（`MAX_STATES`），更老的只存在磁盘上的 `<data>/syncs/` 里；DSH 连开几天不会一直挂着一串 state。
 
 ## 5. 传输契约
 

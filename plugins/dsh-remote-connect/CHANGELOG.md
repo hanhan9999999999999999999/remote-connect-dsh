@@ -2,6 +2,20 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.30 — 2026-11-15
+
+### 修复
+
+- **对端发来坏 profile 会把本机那份覆盖掉**：`merge-profile` 以前解析失败就 `return`，然后照常 `rename` 落地——本机的 `profiles/<name>/package.json` 被换成一份坏 JSON，DSH 下次启动直接读不出来。现在解析失败或不是对象就整条跳过（计入 `skipped`、清掉临时文件、留一条 warn），本机文件一个字节都不动。
+- **合并 profile 时 `private` 也被对端改掉**：只保留 `name` 是不够的——`private` 同属「这台机器自己的身份」，对端把 profile 打成可发布的，不该顺手把接收方也变成可发布。现在 `name` 与 `private` 都以本机为准，只采纳 `dependencies` 与 `dsh.profile.bundles`。
+- **备份被轮转清掉时，回滚假装成功**：备份目录按 `backupKeep`（默认 5）轮转，老批次的备份可能已经没了；以前这种情况只是默默 warn 一句、`restored` 不计数也被当成正常结束，用户以为撤回了。现在结果里多一个 `missing`（`journal.rollback.missing` 同步记下），界面能如实说「这些文件的备份已经不在了」。
+- **内存里的批次状态只进不出**：`Applier.syncs` 每同步一次就多一条，DSH 连开几天会挂着一长串。现在只留最近 20 条（`MAX_STATES`），更老的只存在磁盘上的 `<data>/syncs/` 里，`/local/syncs` 仍读得到。
+
+### 新增
+
+- `test/apply-guard.mjs`（4 项断言）：坏 JSON 的 `merge-profile` 不覆盖本机 profile 且不留 `.dshlink`；正常合并后 `name`/`private` 仍是本机的、依赖与 bundles 并集正确；连开 25 个批次后内存里只剩 20 条；对照组确认普通条目照样落地。
+- `test/rollback.mjs` 加第 5 项：备份文件不存在时 `restored === 0`、`missing === 1`，内容保持原样，`journal.json` 里同样记下。
+
 ## 1.0.29 — 2026-11-15
 
 ### 修复
