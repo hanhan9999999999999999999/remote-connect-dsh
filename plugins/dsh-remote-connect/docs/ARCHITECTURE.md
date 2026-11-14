@@ -147,8 +147,8 @@
 | POST | `/task/status` · `/task/cancel` | 同步任务进度 / 取消 |
 | POST | `/local/syncs` · `/local/rollback` | 本机应用记录 / 回滚 |
 | POST | `/remote/syncs` · `/remote/rollback` | 对端记录 / 让对方回滚 |
-| GET | `/phone/status` · `/phone/port` · `/phone/paircode` | 手机通道状态（同进程直连，不走回环） |
-| POST | `/phone/start` · `/phone/stop` | 手机通道启停 |
+| GET | `/phone/status` | 手机通道状态（同进程直连，不走回环） |
+| POST | `/phone/start` · `/phone/stop` · `/phone/port` · `/phone/paircode` | 手机通道启停、换端口、改配对码（参数在请求体：`{port}` / `{code}`；过去这四条固定空体，换端口与改码永远做不成） |
 
 手机通道自己还注册了 5 条 `/dsh-phone-api/*`（`status`、`start`、`stop`、`port`、`paircode`），
 供桥接侧和调试脚本直接调用。

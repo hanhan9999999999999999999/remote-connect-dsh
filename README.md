@@ -12,7 +12,7 @@
 | 💻 **电脑互联** | 两台电脑互扫配对，同步插件 / 技能 / 规则 / 配置 / 会话，随时可回滚 | 设置 → 远程互联 → 互联 |
 
 - 插件名：`dsh-remote-connect`
-- 版本：1.0.22
+- 版本：1.0.23
 - 许可证：MIT
 - 需要的 DSH：带 `webServer` 服务、客户端支持 `settings.section` 插槽的版本
 
@@ -41,7 +41,7 @@ https://cdn.jsdelivr.net/gh/hanhan9999999999999999999/remote-connect-dsh@main/in
 > 就会以为「怎么装到的还是旧版」。要「现在就是最新」，用上面的 raw 地址；要「永远是某一版」，
 > 用下面的 git 直装并钉标签或 40 位 SHA。
 
-索引里只有这一个插件，版本 `1.0.22`，来源是本仓库的 `plugins/dsh-remote-connect` 子目录。
+索引里只有这一个插件，版本 `1.0.23`，来源是本仓库的 `plugins/dsh-remote-connect` 子目录。
 
 ### 方式二：用 git 直装
 
@@ -49,10 +49,10 @@ https://cdn.jsdelivr.net/gh/hanhan9999999999999999999/remote-connect-dsh@main/in
 
 ```powershell
 # 用发行标签装（推荐，标签指向这一版的发布提交）
-pnpm add "git+https://github.com/hanhan9999999999999999999/remote-connect-dsh.git#v1.0.22&path:/plugins/dsh-remote-connect"
+pnpm add "git+https://github.com/hanhan9999999999999999999/remote-connect-dsh.git#v1.0.23&path:/plugins/dsh-remote-connect"
 ```
 
-想钉死某个 commit 也可以，把 `#v1.0.22` 换成 40 位 SHA；`index.json` 里钉的就是同一版的具体
+想钉死某个 commit 也可以，把 `#v1.0.23` 换成 40 位 SHA；`index.json` 里钉的就是同一版的具体
 commit（社区市场要求 40 位 SHA），两者由发版流程一起更新，见 `RELEASING.md` 第 5 节。
 
 ### 方式三：手动放进 profile
@@ -133,8 +133,8 @@ dsh-remote-connect:
 | POST | `/task/status` · `/task/cancel` | 同步任务进度 / 取消 |
 | POST | `/local/syncs` · `/local/rollback` | 本机同步记录 / 回滚 |
 | POST | `/remote/syncs` · `/remote/rollback` | 对端同步记录 / 回滚 |
-| GET | `/phone/status` · `/phone/port` · `/phone/paircode` | 手机通道代理（同进程直连） |
-| POST | `/phone/start` · `/phone/stop` | 手机通道启停 |
+| GET | `/phone/status` | 手机通道状态（同进程直连，不走回环） |
+| POST | `/phone/start` · `/phone/stop` · `/phone/port` · `/phone/paircode` | 手机通道启停、换端口、改配对码；参数放请求体（`{port}` / `{code}`） |
 
 手机通道自身还注册了一组 `/dsh-phone-api/*`（`status` / `start` / `stop` / `port` / `paircode`）。
 

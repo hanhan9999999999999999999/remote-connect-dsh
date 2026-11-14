@@ -157,10 +157,11 @@ export function apply(ctx, config = {}) {
     }
   }
   reg('GET', '/phone/status', async () => phone('/status').catch(unavailable))
-  reg('POST', '/phone/start', async () => phone('/start', 'POST', {}).catch(unavailable))
+  // 这三条要把参数带下去：过去固定 GET/空体，等于「换端口」「改配对码」永远做不成
+  reg('POST', '/phone/start', async (body) => phone('/start', 'POST', body ?? {}).catch(unavailable))
   reg('POST', '/phone/stop', async () => phone('/stop', 'POST', {}).catch(unavailable))
-  reg('GET', '/phone/port', async () => phone('/port').catch(unavailable))
-  reg('GET', '/phone/paircode', async () => phone('/paircode').catch(unavailable))
+  reg('POST', '/phone/port', async (body) => phone('/port', 'POST', body ?? {}).catch(unavailable))
+  reg('POST', '/phone/paircode', async (body) => phone('/paircode', 'POST', body ?? {}).catch(unavailable))
 
   ctx.effect?.(() => () => {
     for (const d of dispose) {

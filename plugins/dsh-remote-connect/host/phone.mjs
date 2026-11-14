@@ -29,6 +29,11 @@ export const __test = {
   netstatListeners,
   startBridgeOnce,
   spawnBridgeDirect,
+  readJsonBody,
+  resolveNodeCandidates,
+  startStatusFor,
+  portStatusFor,
+  killPid,
 };
 
 /**
@@ -249,9 +254,14 @@ async function clearStale(port) {
   invalidateNetstat(); // 缓存作废，重新看一遍真实情况
   return probePort(port);
 }
+/**
+ * 结束一个进程。手机通道只有 Windows 版（ensure-running.ps1 / taskkill），
+ * 别的平台上直接返回 false —— 不去 spawn 一个不存在的 `taskkill.exe`。
+ * 调用方一律靠「事后 health 通不通」判断结果，不依赖这里的返回值。
+ */
 function killPid(pid) {
+  if (!pid || process.platform !== 'win32') return Promise.resolve(false);
   return new Promise((resolve) => {
-    if (!pid) return resolve(false);
     execFile('taskkill.exe', ['/PID', String(pid), '/F'], { windowsHide: true, timeout: 10000 }, (err) => {
       resolve(!err);
     });
@@ -324,12 +334,21 @@ async function snapshot() {
   };
 }
 
-function candidateNodes() {
-  const home = process.env.USERPROFILE || '';
+/**
+ * 找 node.exe 的候选顺序。DSH 的数据目录已经从用户主目录搬走过一次，
+ * 所以先看 `DSH_HOME` 再退回 `~/.dsh`——不然换了 DSH_HOME 的机器这里永远找不到，
+ * 只能落到 PATH 里的 `node.exe`，那在没有全局 node 的机器上就是「找不到 node.exe」。
+ */
+function resolveNodeCandidates() {
+  const home = process.env.USERPROFILE || process.env.HOME || '';
   const local = process.env.LOCALAPPDATA || '';
-  const list = [
-    path.join(home, '.dsh', 'dsh-runtimes', 'dsh-primary-runtime', 'dependencies', 'node', 'bin', 'node.exe'),
+  const list = [];
+  const runtimes = (base) => [
+    path.join(base, 'dsh-runtimes', 'dsh-primary-runtime', 'dependencies', 'node', 'bin', 'node.exe'),
+    path.join(base, 'dsh-runtimes', 'dsh-next-primary-runtime', 'dependencies', 'node', 'bin', 'node.exe'),
   ];
+  if (process.env.DSH_HOME) list.push(...runtimes(process.env.DSH_HOME));
+  if (home) list.push(...runtimes(path.join(home, '.dsh')));
   try {
     const base = path.join(local, 'openai', 'codex', 'runtimes', 'cua_node');
     for (const d of readdirSync(base)) list.push(path.join(base, d, 'bin', 'node.exe'));
@@ -342,7 +361,7 @@ function candidateNodes() {
 
 /** 直接拉起桥接进程（不依赖 ensure-running.ps1，省掉它那套 90 秒锁与 30 秒等待）。 */
 async function spawnBridgeDirect(port) {
-  const node = candidateNodes().find((p) => p === 'node.exe' || existsSync(p));
+  const node = resolveNodeCandidates().find((p) => p === 'node.exe' || existsSync(p));
   if (!node) return { ok: false, error: '找不到 node.exe' };
   try {
     mkdirSync(RUNTIME_DIR, { recursive: true });
@@ -518,16 +537,91 @@ async function stopBridge() {
   return { stopped: false, pid: pid || null, killed, error: '进程仍在响应' };
 }
 
-function readBody(req) {
+/**
+ * 读 JSON 请求体。三种结果，任何一种都会 settle——过去超过 1e5 字符只 `req.destroy()`，
+ * 'end' 不会再来，那个 promise 就永远挂着，请求一直不返回。
+ *
+ *   { ok: true, body }                     空体当 {}，对象以外（数组/字符串/数字）算 BAD_JSON
+ *   { ok: false, code: 'BODY_TOO_LARGE' }  超过上限：停止累积，但仍把剩余数据读完再回话
+ *   { ok: false, code: 'BAD_JSON' }        有内容但解不出
+ */
+const BODY_LIMIT = 100 * 1024;
+const BODY_ERRORS = {
+  BODY_TOO_LARGE: `请求体超过 ${BODY_LIMIT} 字节`,
+  BAD_JSON: '请求体不是合法的 JSON 对象',
+};
+function readJsonBody(req) {
   return new Promise((resolve) => {
     let body = '';
+    let tooLarge = false;
     req.on('data', (c) => {
+      if (tooLarge) return;
       body += c;
-      if (body.length > 1e5) req.destroy();
+      if (body.length > BODY_LIMIT) {
+        tooLarge = true;
+        body = '';
+      }
     });
-    req.on('end', () => resolve(body));
-    req.on('error', () => resolve(body));
+    req.on('end', () => {
+      if (tooLarge) return resolve({ ok: false, code: 'BODY_TOO_LARGE' });
+      if (!body.trim()) return resolve({ ok: true, body: {} });
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        return resolve({ ok: false, code: 'BAD_JSON' });
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return resolve({ ok: false, code: 'BAD_JSON' });
+      }
+      resolve({ ok: true, body: parsed });
+    });
+    req.on('error', () => resolve({ ok: false, code: tooLarge ? 'BODY_TOO_LARGE' : 'BAD_JSON' }));
   });
+}
+
+/** 启动结果的 HTTP 码：起来了 200；端口被别人占着且不许换端口 409；还在起 504。 */
+function startStatusFor(r) {
+  if (r && r.started) return 200;
+  if (r && r.conflict) return 409;
+  return 504;
+}
+
+/** 换端口结果的 HTTP 码：换成功 200；参数不是合法端口 400；端口被占 409；起不来 504。 */
+function portStatusFor(r) {
+  if (r && r.switched) return 200;
+  if (r && r.conflict) return 409;
+  return 400;
+}
+
+/**
+ * 改配对码。校验 → 看桥接有没有初始化 → 交给桥接自己去改
+ * （它要把新码写进内存 + state.json，否则下一轮会被内存里的旧值回写覆盖）。
+ * 返回 { status, body }，调用方决定怎么回话；同进程直连与 HTTP 路由共用这一份。
+ */
+async function setPairCode(rawCode) {
+  const code = String(rawCode ?? '').trim();
+  if (!/^\d{4,8}$/.test(code)) {
+    return { status: 400, body: { ok: false, error: '配对码只能是 4-8 位数字' } };
+  }
+  const st = readJsonFile(STATE_FILE) || {};
+  if (!st.token) {
+    return { status: 409, body: { ok: false, error: '手机桥接还没初始化（state.json 无 token），先点「开启远程服务」' } };
+  }
+  try {
+    const r = await fetch(`http://127.0.0.1:${bridgePort()}/api/pair-code?t=${encodeURIComponent(st.token)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code }),
+      signal: AbortSignal.timeout(6000),
+    }).then(async (x) => ({ status: x.status, json: await x.json().catch(() => null) }));
+    if (r.json && r.json.ok) return { status: 200, body: { ok: true, pairCode: r.json.pairCode ?? code } };
+    return { status: r.status || 502, body: { ok: false, error: (r.json && r.json.error) || '桥接拒绝修改' } };
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    const friendly = msg.includes('fetch') || msg.includes('ECONN') ? '手机桥接没在运行，先点「开启远程服务」' : msg;
+    return { status: 502, body: { ok: false, error: friendly } };
+  }
 }
 
 /**
@@ -549,9 +643,15 @@ export const api = Object.freeze({
     const r = await switchPort(body && body.port);
     return { ...(await snapshot()), ...r };
   },
-  paircode: async () => {
-    const st = readJsonFile(STATE_FILE) || {};
-    return { ok: true, pairCode: st.pairCode || null, token: st.token ? true : false };
+  /** 不给 code 就是读；给了就改（与 HTTP 路由同一份逻辑，别只让其中一条能改）。 */
+  paircode: async (body) => {
+    const code = body && body.code;
+    if (code === undefined || code === null || code === '') {
+      const st = readJsonFile(STATE_FILE) || {};
+      return { ok: true, pairCode: st.pairCode || null, token: !!st.token };
+    }
+    const r = await setPairCode(code);
+    return { ...(await snapshot()), ...r.body, status: r.status };
   },
 });
 
@@ -586,17 +686,15 @@ export function apply(ctx, config = {}) {
     kind: 'exact',
     path: '/dsh-phone-api/start',
     async handler(req, res) {
+      const parsed = await readJsonBody(req);
+      if (!parsed.ok) {
+        writeJson(res, parsed.code === 'BODY_TOO_LARGE' ? 413 : 400, { ok: false, error: BODY_ERRORS[parsed.code] });
+        return;
+      }
       try {
-        const raw = await readBody(req);
-        let body = {};
-        try {
-          body = raw ? JSON.parse(raw) : {};
-        } catch {
-          body = {};
-        }
         // autoPort 默认 true：端口被陌生人占着也要把服务弄起来，宁可换端口并明确告知
-        const r = await startBridge({ port: body.port, autoPort: body.autoPort !== false });
-        writeJson(res, r.started ? 200 : 504, { ...(await snapshot()), ...r });
+        const r = await startBridge({ port: parsed.body.port, autoPort: parsed.body.autoPort !== false });
+        writeJson(res, startStatusFor(r), { ...(await snapshot()), ...r });
       } catch (e) {
         writeJson(res, 500, { ok: false, error: String(e && e.message) });
       }
@@ -608,16 +706,14 @@ export function apply(ctx, config = {}) {
     kind: 'exact',
     path: '/dsh-phone-api/port',
     async handler(req, res) {
+      const parsed = await readJsonBody(req);
+      if (!parsed.ok) {
+        writeJson(res, parsed.code === 'BODY_TOO_LARGE' ? 413 : 400, { ok: false, error: BODY_ERRORS[parsed.code] });
+        return;
+      }
       try {
-        const raw = await readBody(req);
-        let body = {};
-        try {
-          body = raw ? JSON.parse(raw) : {};
-        } catch {
-          body = {};
-        }
-        const r = await switchPort(body.port);
-        writeJson(res, r.switched ? 200 : 400, { ...(await snapshot()), ...r });
+        const r = await switchPort(parsed.body.port);
+        writeJson(res, portStatusFor(r), { ...(await snapshot()), ...r });
       } catch (e) {
         writeJson(res, 500, { ok: false, error: String(e && e.message) });
       }
@@ -628,8 +724,13 @@ export function apply(ctx, config = {}) {
     kind: 'exact',
     path: '/dsh-phone-api/stop',
     async handler(req, res) {
+      // 停止不看请求体，但也要把它读完：不读完，连接不会正常收尾
+      const parsed = await readJsonBody(req);
+      if (!parsed.ok && parsed.code === 'BODY_TOO_LARGE') {
+        writeJson(res, 413, { ok: false, error: BODY_ERRORS.BODY_TOO_LARGE });
+        return;
+      }
       try {
-        await readBody(req);
         const r = await stopBridge();
         writeJson(res, r.stopped ? 200 : 500, { ...(await snapshot()), ...r });
       } catch (e) {
@@ -642,34 +743,16 @@ export function apply(ctx, config = {}) {
     kind: 'exact',
     path: '/dsh-phone-api/paircode',
     async handler(req, res) {
+      const parsed = await readJsonBody(req);
+      if (!parsed.ok) {
+        writeJson(res, parsed.code === 'BODY_TOO_LARGE' ? 413 : 400, { ok: false, error: BODY_ERRORS[parsed.code] });
+        return;
+      }
+      const r = await setPairCode(parsed.body.code);
       try {
-        const raw = await readBody(req);
-        const body = raw ? JSON.parse(raw) : {};
-        const code = String(body.code ?? '').trim();
-        if (!/^\d{4,8}$/.test(code)) {
-          writeJson(res, 400, { ok: false, error: '配对码只能是 4-8 位数字' });
-          return;
-        }
-        const st = readJsonFile(STATE_FILE) || {};
-        if (!st.token) {
-          writeJson(res, 409, { ok: false, error: '手机桥接还没初始化（state.json 无 token），先点「开启远程服务」' });
-          return;
-        }
-        // 交给桥接改：它把新码写进内存 + state.json，否则下一轮会被内存值回写覆盖
-        const r = await fetch(`http://127.0.0.1:${bridgePort()}/api/pair-code?t=${encodeURIComponent(st.token)}`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ code }),
-          signal: AbortSignal.timeout(6000),
-        }).then(async (x) => ({ status: x.status, json: await x.json().catch(() => null) }));
-        if (r.json && r.json.ok) writeJson(res, 200, { ...(await snapshot()), ok: true, pairCode: r.json.pairCode });
-        else writeJson(res, r.status || 502, { ok: false, error: (r.json && r.json.error) || '桥接拒绝修改', pairCode: st.pairCode || null });
+        writeJson(res, r.status, { ...(await snapshot()), ...r.body });
       } catch (e) {
-        const msg = String((e && e.message) || e);
-        writeJson(res, 500, {
-          ok: false,
-          error: msg.includes('fetch') || msg.includes('ECONN') ? '手机桥接没在运行，先点「开启远程服务」' : msg,
-        });
+        writeJson(res, r.status, { ...r.body, snapshotError: String(e && e.message) });
       }
     },
   });

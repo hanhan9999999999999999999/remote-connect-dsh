@@ -2,6 +2,22 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.23 — 2026-11-15
+
+### 修复
+
+- **请求体超过 100 KB 时那条请求永远不返回**：`readBody` 过去在超限时只 `req.destroy()`，`end` 事件不会再来，promise 永不 settle，连接一直挂着。现在改为停止累积、读完剩余数据后回 `413`（`BODY_TOO_LARGE`），并给了一个 100 KB 的明确上限。
+- **请求体不是 JSON 时配对码接口回 500**：`/dsh-phone-api/paircode` 过去裸 `JSON.parse`，解不出就走 catch 报 500 并把 `Unexpected token` 甩给用户。现在统一用 `readJsonBody`，非法请求体回 `400`（`BAD_JSON`）。
+- **`/phone/port` 与 `/phone/paircode` 这两条代理永远做不成事**：它们签的是 GET 且不带 body，于是 `switchPort(undefined)`、`setPairCode(undefined)` 必然失败——面板上看得到接口，实际换不了端口、改不了配对码。现在都是 `POST`，把请求体原样带下去；`/phone/start` 也改成透传 `{port, autoPort}`。
+- **同进程直连的 `api.paircode(body)` 只能读不能改**：只有 HTTP 路由能改配对码，同进程调用永远是读取。现在读取与修改共用一份 `setPairCode()`，两条通路行为一致。
+- **找 node.exe 时仍钉在 `~/.dsh`**：DSH 的数据目录已搬到 `DSH_HOME` 之后，这里只在 `%USERPROFILE%\.dsh` 下找，换了 DSH_HOME 的机器只能落到 PATH 里的 `node.exe`。现在顺序是 `DSH_HOME` → `~/.dsh` → Codex 自带 node → `node.exe`。
+- 非 Windows 平台不再去 spawn 一个不存在的 `taskkill.exe`（直接返回 `false`；手机通道本来就只有 Windows 版）。
+- 启动/换端口的状态码不再一律 504/400：端口被别的程序占着回 `409`，还在起回 `504`，参数不是合法端口才回 `400`。
+
+### 新增
+
+- `test/phone-http.mjs` 12 项断言：请求体（合法/空/数组/半截/**超限必须回话而不是挂住**）、启动与换端口的状态码映射、`DSH_HOME` 优先于 `~/.dsh`、末位回落到 `node.exe`、`killPid` 在非 Windows 不 spawn。
+
 ## 1.0.22 — 2026-11-15
 
 ### 修复

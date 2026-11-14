@@ -28,6 +28,7 @@ const suites = [
   'docs-guard.mjs',
   'install.mjs',
   'plugin-smoke.mjs',
+  'phone-http.mjs',
   'e2e.mjs',
 ]
 
