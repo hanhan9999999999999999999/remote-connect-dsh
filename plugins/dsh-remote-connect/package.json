@@ -5,6 +5,16 @@
   "description": "远程互联：手机和电脑互通（扫码配对、浏览器直接操作电脑上的 DSH），以及两台电脑之间同步插件、技能、规则、配置与会话",
   "keywords": ["dsh", "plugin", "remote", "phone", "sync", "remote-connect", "lan"],
   "license": "MIT",
+  "author": "茄茄子",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hanhan9999999999999999999/remote-connect-dsh.git",
+    "directory": "plugins/dsh-remote-connect"
+  },
+  "homepage": "https://github.com/hanhan9999999999999999999/remote-connect-dsh#readme",
+  "bugs": {
+    "url": "https://github.com/hanhan9999999999999999999/remote-connect-dsh/issues"
+  },
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",

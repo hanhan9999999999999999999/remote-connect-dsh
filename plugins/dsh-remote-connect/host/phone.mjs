@@ -1,5 +1,5 @@
 /**
- * dsh-phone-bridge — host half.
+ * dsh-remote-connect — host half（手机通道）.
  *
  * 给 DSH Web UI 提供三个接口，用来在页面里直接开关手机远程服务（phone-bridge）：
  *   GET  /dsh-phone-api/status  → { running, pid, paused, publicUrl, ... }
@@ -88,7 +88,7 @@ function bridgePort() {
 function writePortJson(port) {
   try {
     mkdirSync(RUNTIME_DIR, { recursive: true });
-    writeFileSync(PORT_FILE, JSON.stringify({ port: Number(port), at: new Date().toISOString(), by: 'dsh-phone-bridge' }), 'utf8');
+    writeFileSync(PORT_FILE, JSON.stringify({ port: Number(port), at: new Date().toISOString(), by: 'dsh-remote-connect' }), 'utf8');
     return true;
   } catch {
     return false;
@@ -521,7 +521,7 @@ async function switchPort(target) {
 async function stopBridge() {
   try {
     mkdirSync(RUNTIME_DIR, { recursive: true });
-    writeFileSync(PAUSE_FLAG, JSON.stringify({ at: new Date().toISOString(), by: 'dsh-phone-bridge' }), 'utf8');
+    writeFileSync(PAUSE_FLAG, JSON.stringify({ at: new Date().toISOString(), by: 'dsh-remote-connect' }), 'utf8');
   } catch (e) {
     return { stopped: false, error: `写 paused.flag 失败: ${String(e && e.message)}` };
   }
