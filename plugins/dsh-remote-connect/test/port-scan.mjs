@@ -98,13 +98,22 @@ await ok('listenerPids 对一个没人用的高端口返回空数组', async () 
   assert.equal(pids.length, 0);
 });
 
-await ok('pickFreePort 挑出的端口确实不在监听表里', async () => {
-  const port = await pickFreePort(65000);
-  assert.ok(port === 0 || (port >= 65000 && port <= 65060));
-  if (port) {
+// 下面这条要在真有 netstat 的机器上才有意义（CI 的 ubuntu 作业也会跑这个文件）
+if (process.platform === 'win32') {
+  await ok('pickFreePort 挑出的端口确实不在监听表里', async () => {
+    const port = await pickFreePort(65000);
+    assert.ok(port === 0 || (port >= 65000 && port <= 65060));
+    if (port) {
+      const map = await netstat.netstatListeners();
+      assert.equal(map.has(port), false);
+    }
+  });
+} else {
+  await ok('非 Windows 上直接回落空表，不反复起进程', async () => {
+    invalidateNetstat();
     const map = await netstat.netstatListeners();
-    assert.equal(map.has(port), false);
-  }
-});
+    assert.equal(map.size, 0);
+  });
+}
 
-console.log(`port ok · ${pass} 项断言 · 解析 / 认领 / 缓存 / 挑端口`);
+console.log(`port ok · ${pass} 项断言 · 解析 / 认领 / 缓存 / 挑端口（${process.platform}）`);

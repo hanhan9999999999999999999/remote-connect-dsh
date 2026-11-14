@@ -12,7 +12,7 @@ import { execFile } from 'node:child_process';
 
 /** netstat 结果缓存 2 秒——一次启停会连着问好几遍，别每次都起一个 netstat.exe。 */
 const CACHE_MS = 2000;
-let cache = { at: 0, map: new Map() };
+let cache = { at: 0, map: new Map(), valid: false };
 
 /**
  * 解析 `netstat.exe -ano` 的输出，返回 `Map<端口, pid[]>`。
@@ -40,16 +40,26 @@ export function parseNetstat(stdout) {
 
 /** 缓存作废（杀掉进程、换端口之后必须调，否则 2 秒内看到的还是旧身影）。 */
 export function invalidateNetstat() {
-  cache.at = 0;
+  cache.valid = false;
 }
 
-/** 全量监听表（带 2 秒缓存）。拿不到 netstat 时返回空表，不抛错。 */
+/**
+ * 全量监听表（带 2 秒缓存）。拿不到 netstat 时返回空表，不抛错。
+ *
+ * 这个插件本身只在 Windows 上跑，但测试要在 Linux CI 上过：所以找不到
+ * `netstat.exe` 时不反复起进程、直接返回空表（「谁在听」这件事在那边没有意义）。
+ * 缓存用 valid 标记而不是看 `map.size`——空表也是有效结果，不该每 2 秒重探一次。
+ */
 export function netstatListeners() {
   return new Promise((resolve) => {
-    if (Date.now() - cache.at < CACHE_MS && cache.map.size) return resolve(cache.map);
+    if (cache.valid && Date.now() - cache.at < CACHE_MS) return resolve(cache.map);
+    if (process.platform !== 'win32') {
+      cache = { at: Date.now(), map: new Map(), valid: true };
+      return resolve(cache.map);
+    }
     execFile('netstat.exe', ['-ano'], { windowsHide: true, timeout: 10000 }, (err, stdout) => {
       const map = err && !stdout ? new Map() : parseNetstat(stdout);
-      cache = { at: Date.now(), map };
+      cache = { at: Date.now(), map, valid: true };
       resolve(map);
     });
   });
