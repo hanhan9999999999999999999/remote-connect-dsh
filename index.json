@@ -34,7 +34,7 @@
           "source": {
             "type": "git",
             "url": "https://github.com/hanhan9999999999999999999/remote-connect-dsh.git",
-            "commit": "e90435d7d9365220bbcd01bc77714dca5866c501",
+            "commit": "cb19dc6d1edd0254c120a4c77c842c2d594ec37b",
             "path": "plugins/dsh-remote-connect"
           },
           "engines": { "dsh": ">=0.1.0" }
