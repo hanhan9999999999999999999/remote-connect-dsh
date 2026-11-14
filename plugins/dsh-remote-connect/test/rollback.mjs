@@ -145,8 +145,42 @@ await ok('备份被轮转清掉时回报 missing，而不是当作已还原', as
   assert.equal(journal.rollback.missing, 1, 'journal 里也要记下来')
 })
 
+/* 6. 批次编号拼进路径：不许用 ../ 把回滚引到别处 */
+await ok('批次编号越界时抛 BAD_INPUT，不去碰任何目录', async () => {
+  for (const bad of ['../../etc', '..', 'a/b', '', 'x'.repeat(65)]) {
+    await assert.rejects(
+      () => applier().rollback(bad),
+      (err) => err.code === 'BAD_INPUT',
+      `应当拒绝 ${JSON.stringify(bad)}`,
+    )
+  }
+})
+
+/* 7. journal 里的备份路径同样当不可信输入 */
+await ok('journal 里的备份路径越界时按「备份没了」处理，不复制到外面去', async () => {
+  const syncId = 's_evilbackup'
+  const dir = path.join(dataHome, 'syncs', syncId)
+  await fsp.mkdir(dir, { recursive: true })
+  await write('rules/evil.md', '同步后的内容')
+  // 把 dataHome 之外的一个文件写进「备份」位置：以前的写法会顺着 ../ 去读它
+  const outside = path.join(dataHome, 'outside-secret.txt')
+  await fsp.writeFile(outside, '不该被读到的东西')
+  await fsp.writeFile(
+    path.join(dir, 'journal.json'),
+    JSON.stringify({
+      id: syncId,
+      entries: [{ rel: 'rules/evil.md', reason: 'replaced', backup: `backups/${syncId}/../../outside-secret.txt` }],
+    }),
+  )
+
+  const out = await applier().rollback(syncId)
+  assert.equal(out.restored, 0, '越界的备份不能被当成还原成功')
+  assert.equal(out.missing, 1, '算作「备份没了」')
+  assert.equal(read('rules/evil.md'), '同步后的内容', '目标文件保持原样')
+})
+
 await fsp.rm(dshHome, { recursive: true, force: true }).catch(() => {})
 await fsp.rm(dataHome, { recursive: true, force: true }).catch(() => {})
 
-console.log(`rollback ok · ${pass} 项断言 · 正常批次 / 半途失败 / 重复回滚 / 无记录 / 备份被清（${pass} 通过、${fail} 失败）`)
+console.log(`rollback ok · ${pass} 项断言 · 正常批次 / 半途失败 / 重复回滚 / 无记录 / 备份被清 / 编号越界 / 备份路径越界（${pass} 通过、${fail} 失败）`)
 if (fail) process.exit(1)

@@ -2,6 +2,17 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.46 — 2026-11-15
+
+### 修复
+
+- **批次编号是拼进路径的，以前没人管它长什么样**：`Applier#dir()` 直接 `path.join(dataHome, 'syncs', syncId)`，而 `syncId` 一路来自对端的请求（`POST /rollback`、`GET /progress` 都带着它）。带上 `../` 就能让回滚去读数据目录之外的 `journal.json`。现在先按 `^[A-Za-z0-9_-]{1,64}$` 校验，不合规报 `BAD_INPUT`，一个路径都不拼。
+- **`journal` 里记的备份路径也是不可信输入**：回滚还原时用 `path.join(dataHome, ...entry.backup.split('/'))` 直接读——被改过的 journal 能让它去复制数据目录之外的文件。现在改成 `safeJoin(this.dataHome, entry.backup)`，越界就按「备份没了」处理（计入 `missing`），而不是去读别处。
+
+### 新增
+
+- `test/rollback.mjs` 加两项（现 7 项）：批次编号 `'../../etc'`、`'..'`、`'a/b'`、空串、超长串一律 `BAD_INPUT`；journal 里的备份路径写成 `backups/<id>/../../outside-secret.txt` 时不得复制那个文件，只算 `missing`。
+
 ## 1.0.45 — 2026-11-15
 
 ### 修复

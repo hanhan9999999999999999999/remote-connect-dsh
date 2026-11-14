@@ -18,6 +18,9 @@ const JOURNAL_VERSION = 1
 /** 内存里最多保留多少个批次状态（再老的只留在磁盘上的 syncs/ 里） */
 const MAX_STATES = 20
 
+/** 批次编号会拼进路径，格式必须是本插件自己生成的那种（`rid()` 产出的十六进制串） */
+const SYNC_ID = /^[A-Za-z0-9_-]{1,64}$/
+
 
 export class Applier {
   constructor({ logger, dataHome, sync = {}, onEvent } = {}) {
@@ -29,7 +32,12 @@ export class Applier {
   }
 
   #dir(syncId) {
-    return path.join(this.dataHome, 'syncs', syncId)
+    // 这个编号是从对端的请求里来的（`/rollback`、`/progress` 都带着它），
+    // 以前直接拼进路径：`../../…` 就能让回滚去读别处的 journal。
+    if (!SYNC_ID.test(String(syncId ?? ''))) {
+      throw new AppError('BAD_INPUT', `同步批次编号不合法：${String(syncId ?? '').slice(0, 40)}`)
+    }
+    return path.join(this.dataHome, 'syncs', String(syncId))
   }
 
   /**
@@ -345,8 +353,15 @@ export class Applier {
     for (const entry of entries) {
       const abs = safeJoin(root, entry.rel)
       if (entry.backup) {
-        const backupAbs = path.join(this.dataHome, ...entry.backup.split('/'))
+        // 备份路径写在 journal 里，也当不可信输入：出了数据目录就当成「备份没了」
+        let backupAbs = null
         try {
+          backupAbs = safeJoin(this.dataHome, entry.backup)
+        } catch {
+          backupAbs = null
+        }
+        try {
+          if (!backupAbs) throw Object.assign(new Error('备份路径越界'), { code: 'ENOENT' })
           await ensureDir(path.dirname(abs))
           await fsp.copyFile(backupAbs, abs)
           restored += 1
