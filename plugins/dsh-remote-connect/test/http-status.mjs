@@ -53,11 +53,16 @@ await ok('「太大」是 413，不是 500', () => {
   assert.equal(statusFor('BODY_TOO_LARGE'), 413)
 })
 
-await ok('对端的问题归 502，本地故障才归 500', () => {
+await ok('对端的问题归 502，内容不对归 400，本地故障才归 500', () => {
   for (const code of ['NETWORK', 'TIMEOUT', 'NOT_DSH_LINK', 'BAD_RESPONSE', 'BAD_ENVELOPE']) {
     assert.equal(statusFor(code), 502, code)
   }
-  for (const code of ['READ_FAILED', 'CONFIG_BROKEN', 'CONFIG_UNREADABLE', 'BACKUP_FAILED', 'HASH_MISMATCH']) {
+  // 哈希/大小不符是对面发来的内容不对（或者传到一半被截），不是本机出了意外：
+  // 报 500 会让用户以为是自己这边坏了。
+  for (const code of ['HASH_MISMATCH', 'SIZE_MISMATCH']) {
+    assert.equal(statusFor(code), 400, code)
+  }
+  for (const code of ['READ_FAILED', 'CONFIG_BROKEN', 'CONFIG_UNREADABLE', 'BACKUP_FAILED']) {
     assert.equal(statusFor(code), 500, code)
   }
   assert.equal(statusFor(undefined), 500)

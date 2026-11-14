@@ -30,6 +30,7 @@ import { FrameEncoderTransform, decodeFrames } from './frames.mjs'
 import { listProfiles } from './inventory.mjs'
 import { CLOCK_SKEW_MS, FailureTracker, NONCE_WINDOW_MS, clientIp, sanitizeDevice } from './guard.mjs'
 import { signatureBase } from './sign.mjs'
+import { statusFor } from './status.mjs'
 
 const BASE = '/dsh-link/v1'
 const MAX_JSON = 4 * 1024 * 1024
@@ -234,8 +235,12 @@ export class LinkServer {
     // everything below requires a valid session + signature
     const isStreamUpload =
       (req.method === 'PUT' || req.method === 'POST') && sub.startsWith('/apply/') && sub !== '/apply/prepare'
+    // 先看令牌本身：没有令牌、会话过期、被锁，就没必要把几 MB 的 body 读进来再拒绝
+    // （128 条连接 × 4 MB 就是半 GB 的内存，谁都能凑出来）。
+    const early = this.#lookupSession(req, res)
+    if (!early) return
     const body = req.method === 'GET' || isStreamUpload ? Buffer.alloc(0) : await jsonBody(req, MAX_JSON)
-    const session = this.#authorize(req, url, body, res)
+    const session = this.#authorize(req, url, body, res, early)
     if (!session) return
 
     if (req.method === 'GET' && sub === '/ping') {
@@ -463,9 +468,26 @@ export class LinkServer {
   /* auth for data endpoints                                          */
   /* ---------------------------------------------------------------- */
 
-  #authorize(req, url, body, res) {
+  // 只验证令牌子（有没有这个会话、过没过期），不碰请求体、不验签名。
+  // 目的是在把 body 读进内存之前就能拒掉无令牌的请求。
+  #lookupSession(req, res) {
     const token = String(req.headers['x-dl-token'] ?? '')
     const session = this.sessions.get(token)
+    if (!session) {
+      this.#plain(res, 401, { error: { code: 'UNAUTHORIZED', message: '未连接或会话已过期' } })
+      return null
+    }
+    if (session.expiresAt < Date.now()) {
+      this.sessions.delete(token)
+      this.#plain(res, 401, { error: { code: 'SESSION_EXPIRED', message: '会话已过期，请重新连接' } })
+      return null
+    }
+    return session
+  }
+
+  #authorize(req, url, body, res, known) {
+    const token = String(req.headers['x-dl-token'] ?? '')
+    const session = known ?? this.sessions.get(token)
     if (!session) {
       this.#plain(res, 401, { error: { code: 'UNAUTHORIZED', message: '未连接或会话已过期' } })
       return null
@@ -621,7 +643,9 @@ export class LinkServer {
     } catch (err) {
       this.logger?.error('apply', `应用失败 ${syncId}：${err.message}`)
       const p = this.applier.progress(syncId)
-      this.#error(res, session, 500, err.code ?? 'APPLY_FAILED', err.message, p ? { progress: p } : undefined)
+      // 走同一张错误码表：路径越界是 400、内容超限是 413、批次不存在是 404，
+      // 一律回 500 会让对端以为是「服务端坏了」，而其实它该改的是自己的参数或分批。
+      this.#error(res, session, statusFor(err.code ?? 'APPLY_FAILED'), err.code ?? 'APPLY_FAILED', err.message, p ? { progress: p } : undefined)
     } finally {
       // 落地失败（路径越界、超限……）时对端还在往外传：不关掉的话这条上传流会一直挂着。
       link.destroy()

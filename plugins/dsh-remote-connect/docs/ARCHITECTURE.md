@@ -159,19 +159,22 @@
 
 ### 5.3 错误码 → HTTP 状态码
 
-`index.js` 里有一张固定的映射表（`STATUS`），没登记的错误码一律 500——但响应体里一定带可读的 `error.message`。
+`host/status.mjs` 里有一张固定的映射表（`STATUS`，`index.js` 与 `host/server.mjs` 共用同一张），没登记的错误码一律 500——但响应体里一定带可读的 `error.message`。
 分成五类，界面据此决定是「让你改点什么」还是「这像是坏了」：
 
 | 状态码 | 错误码 | 含义 |
 | --- | --- | --- |
-| 401 | `BAD_PASSWORD` `LOCKED_OUT` `UNAUTHORIZED` `SESSION_EXPIRED` | 密码不对 / 被锁 / 会话失效 |
+| 401 | `BAD_PASSWORD` `LOCKED_OUT` `UNAUTHORIZED` `SESSION_EXPIRED` `MISSING_SIGNATURE` `BAD_SIGNATURE` `REPLAY` `CLOCK_SKEW` | 密码不对 / 被锁 / 会话失效 / 签名不对 |
 | 403 | `KEY_MISMATCH` | 两边的会话密钥对不上（多半是改过密码） |
-| 404 | `PEER_UNKNOWN` `TASK_UNKNOWN` `SYNC_UNKNOWN` | 找不到这个对端 / 任务 / 批次 |
+| 404 | `PEER_UNKNOWN` `TASK_UNKNOWN` `SYNC_UNKNOWN` `PACK_UNKNOWN` `NOT_FOUND` | 找不到这个对端 / 任务 / 批次 / 清单 |
 | 409 | `NOT_CONNECTED` `NEED_PASSWORD` `NO_PASSWORD` `PORT_IN_USE` `SYNC_BUSY` `NO_JOURNAL` `ALREADY_ROLLED_BACK` | 现在做不了，但不是参数错 |
-| 400 | `BAD_INPUT` `BAD_JSON` `NO_HOST` `METHOD` `CATEGORY` `EMPTY` `BAD_PLUGIN_ID` `PATH_ESCAPE` `VERSION_MISMATCH` | 参数或内容不对 |
+| 400 | `BAD_INPUT` `BAD_JSON` `NO_HOST` `METHOD` `CATEGORY` `EMPTY` `BAD_PLUGIN_ID` `PATH_ESCAPE` `VERSION_MISMATCH` `HASH_MISMATCH` `SIZE_MISMATCH` | 参数或内容不对 |
 | 413 | `TOO_LARGE` `BODY_TOO_LARGE` | 内容/请求体超过上限（同步页可以改「同步上限」或分批） |
+| 429 | `LOCKED` | 试太多次，先等一会儿 |
 | 502 | `NETWORK` `TIMEOUT` `NOT_DSH_LINK` `BAD_RESPONSE` `BAD_ENVELOPE` `PHONE_BAD_RESPONSE` `NO_PORT` | 对端的问题，本机没坏 |
-| 500 | 其余（`READ_FAILED` `CONFIG_BROKEN` `CONFIG_UNREADABLE` `BACKUP_FAILED` `HASH_MISMATCH` …） | 本地故障，需要看日志 |
+| 500 | 其余（`READ_FAILED` `CONFIG_BROKEN` `CONFIG_UNREADABLE` `BACKUP_FAILED` …） | 本地故障，需要看日志 |
+
+落地（`/apply/<syncId>`）失败也走同一张表：路径越界 400、内容超限 413、批次不存在 404——以前这一条一律回 500，对端会以为自己或本机坏了，而它该改的其实是参数或分批（`test/server-auth.mjs`）。
 
 ## 6. 失败与恢复
 
@@ -206,6 +209,7 @@
 | 连上来却什么都不发 | `requestTimeout = 0` 是故意的（大包要传很久，不能按总时长掐），换来的是**空闲超时**：连接上 `idleMs`（默认 120 秒）没有任何数据往来就 `socket.destroy()` 并记一条 warn。同步期间一直有数据在走，不会被误杀（`test/server-limits.mjs`） |
 | 连接数被灌满 | `maxConnections`（默认 128）——这是个给对面一两个人连的 P2P 服务，正常人只开几条；到上限时多出来的连接直接被拒，并记一条 warn 带对端地址，而不是让端口把文件句柄耗光（`test/server-limits.mjs`） |
 | 同步途中断开或删掉那台设备 | 它名下的任务统一走取消（`cancelled`，不是 `failed`）并掐断连接，否则任务会一直停在「准备中」——设备都已经不在列表里了，用户也没地方点取消。任务对象在 `#runSync` 里留了一根 `abortNow` 线：即使对端已从 `clients` 里摘掉，取消照样能生效（`test/forget-cancel.mjs`） |
+| 没带令牌就发 POST | 先把令牌本身查一遍（有没有、过没过期），再决定要不要读 body。以前是先读 body 再验身份，128 条连接 × 4 MB 上限就是半个 GB 的内存，谁都能凑出来（`test/server-auth.mjs`） |
 
 ## 7. 兼容性
 

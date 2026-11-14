@@ -2,6 +2,22 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.45 — 2026-11-15
+
+### 修复
+
+- **没带令牌的 POST，服务端会先把请求体读进内存再说「你未连接」**：以前是先 `jsonBody()`（上限 4 MB）再验身份，配合 128 条连接上限，等于谁都能凑出半个 GB 的内存占用。现在先查令牌本身（有没有这个会话、过没过期），过了这一关才读 body；签名、时间戳、重放这些照旧在 body 到手之后验。
+- **落地失败一律回 500**：`/apply/<syncId>` 的失败路径把状态码写死成 500，于是「路径越界」「内容超限」「这个批次不存在」在界面上全是「服务端坏了」。现在走同一张错误码表：`PATH_ESCAPE` 400、`TOO_LARGE` 413、`SYNC_UNKNOWN` 404。
+- **哈希/大小不符算谁的错**：`HASH_MISMATCH` / `SIZE_MISMATCH` 从 500 改成 400——那是对方发来的内容不对（或传到一半被截），不是本机出了意外。报 500 只会让用户以为自己这边坏了。
+
+### 内部
+
+- 错误码表从 `index.js` 挪到 `host/status.mjs`，本机路由（`index.js`）与 P2P 服务端（`host/server.mjs`）共用同一张——把表留在 `index.js` 会绕成循环依赖。顺带补齐了之前漏登记的一批码（`MISSING_SIGNATURE` `BAD_SIGNATURE` `REPLAY` `CLOCK_SKEW` `PACK_UNKNOWN` `NOT_FOUND` `LOCKED`）。
+
+### 新增
+
+- `test/server-auth.mjs`（5 项断言）：无令牌的 POST **在读 body 之前**就回 401（真的只发半个 body 去试）、令牌有效但缺签名头仍 401、过期会话 401 并把它从表里删掉、往不存在的批次上传回 404 `SYNC_UNKNOWN`（不是 500）、下载不存在的清单回 404 `PACK_UNKNOWN`。
+
 ## 1.0.44 — 2026-11-15
 
 ### 修复
