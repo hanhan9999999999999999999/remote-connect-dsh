@@ -46,6 +46,9 @@ window.__ModuleLoader__.load({
       'overview.running': '运行中',
       'overview.stopped': '已停止',
       'overview.port': '监听端口',
+      'overview.bind': '监听地址',
+      'overview.bindLan': '0.0.0.0 · 局域网可访问',
+      'overview.bindLocal': '127.0.0.1 · 仅本机',
       'overview.identity': '本机身份',
       'overview.deviceName': '设备名称',
       'overview.renameHint': '另一台电脑配对时会看到这个名字',
@@ -77,6 +80,7 @@ window.__ModuleLoader__.load({
       'connect.scanEmpty': '没有发现设备，请手动输入地址',
       'connect.self': '本机',
       'connect.host': '地址',
+      'connect.thisMachine': '本机 {addr}',
       'connect.port': '端口',
       'connect.password': '密码',
       'connect.name': '备注名（可选）',
@@ -120,6 +124,7 @@ window.__ModuleLoader__.load({
       'sync.rollbackConfirm': '确认回滚？将恢复本次同步前的文件',
       'sync.rollbackDone': '已回滚',
       'sync.files': '{n} 个文件',
+      'sync.metaLine': '{time} · {n} 文件 · {size}',
       'sync.size': '{size}',
       'sync.phase.queued': '排队中',
       'sync.phase.starting': '正在连接…',
@@ -176,8 +181,8 @@ window.__ModuleLoader__.load({
     }
 
     const en = {
-      nav: 'Device Link',
-      title: 'Device Link',
+      nav: 'Remote Connect',
+      title: 'Remote Connect',
       subtitle: 'Move DSH plugins, skills, rules, config and sessions between computers',
       'tabs.overview': 'Overview',
       'tabs.connect': 'Connect',
@@ -202,6 +207,9 @@ window.__ModuleLoader__.load({
       'overview.running': 'Running',
       'overview.stopped': 'Stopped',
       'overview.port': 'Port',
+      'overview.bind': 'Bind address',
+      'overview.bindLan': '0.0.0.0 · reachable on LAN',
+      'overview.bindLocal': '127.0.0.1 · this machine only',
       'overview.identity': 'This device',
       'overview.deviceName': 'Device name',
       'overview.renameHint': 'The other computer sees this name when pairing',
@@ -233,6 +241,7 @@ window.__ModuleLoader__.load({
       'connect.scanEmpty': 'Nothing found — enter the address manually',
       'connect.self': 'This machine',
       'connect.host': 'Host',
+      'connect.thisMachine': 'This machine {addr}',
       'connect.port': 'Port',
       'connect.password': 'Password',
       'connect.name': 'Label (optional)',
@@ -276,6 +285,7 @@ window.__ModuleLoader__.load({
       'sync.rollbackConfirm': 'Roll back? Files from before this sync are restored',
       'sync.rollbackDone': 'Rolled back',
       'sync.files': '{n} files',
+      'sync.metaLine': '{time} · {n} file(s) · {size}',
       'sync.size': '{size}',
       'sync.phase.queued': 'Queued',
       'sync.phase.starting': 'Connecting…',
@@ -328,7 +338,7 @@ window.__ModuleLoader__.load({
       'toast.serverStarted': 'Link service started',
       'toast.serverStopped': 'Link service stopped',
       'toast.password': 'Password rotated; old sessions ended',
-      'error.load': 'Cannot read Device Link status',
+      'error.load': 'Cannot read Remote Connect status',
     }
 
     /* ------------------------------------------------------------------ */
@@ -1070,7 +1080,7 @@ window.__ModuleLoader__.load({
           ),
           h('div', { className: 'dlk-row' },
             h(Btn, { variant: 'primary', busy: connecting, onClick: () => connect() }, connecting ? t('connect.connecting') : t('connect.connect')),
-            h('span', { className: 'dlk-hint' }, cfg.server.addresses && cfg.server.addresses[0] ? '本机 ' + cfg.server.addresses[0].address + ':' + cfg.server.port : ''),
+            h('span', { className: 'dlk-hint' }, cfg.server.addresses && cfg.server.addresses[0] ? t('connect.thisMachine').replace('{addr}', cfg.server.addresses[0].address + ':' + cfg.server.port) : ''),
           ),
         ),
         h(
@@ -1082,12 +1092,12 @@ window.__ModuleLoader__.load({
             h(Field, { label: t('overview.port'), flex: '1 1 90px' }, h(Input, { value: port, inputMode: 'numeric', onChange: (e) => setPort(e.target.value) })),
             h(
               Field,
-              { label: 'Bind', flex: '1 1 140px' },
+              { label: t('overview.bind'), flex: '1 1 140px' },
               h(
                 'select',
                 { className: 'dlk-input', value: bind, onChange: (e) => setBind(e.target.value) },
-                h('option', { value: '0.0.0.0' }, '0.0.0.0 · 局域网可访问'),
-                h('option', { value: '127.0.0.1' }, '127.0.0.1 · 仅本机'),
+                h('option', { value: '0.0.0.0' }, t('overview.bindLan')),
+                h('option', { value: '127.0.0.1' }, t('overview.bindLocal')),
               ),
             ),
           ),
@@ -1337,7 +1347,7 @@ window.__ModuleLoader__.load({
                     { className: 'dlk-row', key: s.id, style: { padding: '6px 8px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 9 } },
                     h('div', { className: 'dlk-col' },
                       h('span', { className: 'dlk-label', style: { color: 'inherit' } }, (s.from && (s.from.name || s.from.host)) || s.id),
-                      h('span', { className: 'dlk-hint' }, timeText(s.finishedAt || s.at || s.startedAt) + ' · ' + (s.files || 0) + ' 文件 · ' + fmtBytes(s.bytes || 0)),
+                      h('span', { className: 'dlk-hint' }, t('sync.metaLine').replace('{time}', timeText(s.finishedAt || s.at || s.startedAt)).replace('{n}', String(s.files || 0)).replace('{size}', fmtBytes(s.bytes || 0))),
                     ),
                     s.rolledBackAt
                       ? h(Pill, { tone: 'warn' }, t('sync.rollbackDone'))
@@ -1495,7 +1505,7 @@ window.__ModuleLoader__.load({
 
       const report = () => {
         const lines = []
-        lines.push('# DSH Device Link diagnostics')
+        lines.push('# DSH Remote Connect diagnostics')
         lines.push('time: ' + new Date().toISOString())
         if (status) lines.push('version: ' + status.app.version + '\ndataHome: ' + status.app.dataHome + '\ndshHome: ' + status.app.dshHome)
         if (diag) {

@@ -193,6 +193,7 @@
 
 - 协议带 `v1`，`/health` 返回 `app`、`protocol` 与 `version`；对端不是本插件或协议不符时报 `NOT_DSH_LINK`，
   UI 显示「对端不是远程互联服务，或协议版本不兼容」。
+- 界面上每一句文案都必须走 `t('…')`：`test/i18n-guard.mjs` 会扫描 `client.js`，字典之外的字符串里出现中文就报错（注释例外），同时核对中英键集合、占位符（`{n}` / `{size}` / `{time}`）一致，以及 `t('…')` 用到的键都存在。
 - 插件不碰 DSH 内部 API：host 半只用 `ctx.get('webServer')`（`export const inject = ['webServer']`，
   没有它插件不会加载），client 半只用 `ctx.slots` 与 `locale`，缺失时设置页不会出现「远程互联」分区。
 - Windows / macOS / Linux 均可运行；路径处理一律走 `node:path` 与 `fileURLToPath`。

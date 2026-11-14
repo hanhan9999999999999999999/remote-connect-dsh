@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 const here = path.dirname(fileURLToPath(import.meta.url))
 const suites = [
   'client-smoke.mjs',
+  'i18n-guard.mjs',
   'a11y.mjs',
   'tasks.mjs',
   'port-scan.mjs',
