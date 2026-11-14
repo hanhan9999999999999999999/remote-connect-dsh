@@ -1,0 +1,49 @@
+{
+  "name": "dsh-remote-connect",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "远程互联：手机和电脑互通（扫码配对、浏览器直接操作电脑上的 DSH），以及两台电脑之间同步插件、技能、规则、配置与会话",
+  "keywords": ["dsh", "plugin", "remote", "phone", "sync", "remote-connect", "lan"],
+  "license": "MIT",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./host/*": "./host/*",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "host",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "SECURITY.md",
+    "CHANGELOG.md",
+    "docs",
+    "scripts",
+    "test"
+  ],
+  "scripts": {
+    "test": "node test/run-all.mjs",
+    "test:client": "node test/client-smoke.mjs",
+    "test:e2e": "node test/e2e.mjs",
+    "install-plugin": "node scripts/install.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["@deepseek-ai/dsh-client-ui-settings", "@deepseek-ai/dsh-client-locale"]
+    }
+  }
+}
