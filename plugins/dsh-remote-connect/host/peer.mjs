@@ -349,6 +349,7 @@ export class RemotePeer {
     let delay = 700
     let timer = null
     let stopped = false
+    let progressFailures = 0
     const poll = async () => {
       if (stopped) return
       try {
@@ -356,8 +357,16 @@ export class RemotePeer {
           timeoutMs: 5000,
         })
         onProgress?.({ phase: 'applying', remote: p, done: sent, total: totalBytes })
-      } catch {
-        /* progress is best-effort */
+      } catch (err) {
+        // 进度是尽力而为的，失败不必让整个同步失败——但也不能一声不响，
+        // 否则界面上只会看到「进度条一直不动」。同一个错误只记一条。
+        progressFailures += 1
+        const code = err?.code ?? 'ERROR'
+        this.logger?.warnOnce?.(
+          `progress:${code}`,
+          'peer',
+          `查询同步进度失败（${code}：${err?.message ?? err}）。同步本身还在跑，只是进度可能停住。`,
+        )
       }
       if (stopped) return
       delay = Math.min(Math.round(delay * 1.6), 3000)
@@ -379,7 +388,7 @@ export class RemotePeer {
         timeoutMs: 0,
       })
       const result = await this.#jsonFrom(res)
-      onProgress?.({ phase: 'done', done: totalBytes, total: totalBytes, result })
+      onProgress?.({ phase: 'done', done: totalBytes, total: totalBytes, result, progressFailures })
       return result
     } finally {
       stopped = true

@@ -7,7 +7,7 @@ import { MAX_TASKS, TaskTable, newTask, taskView } from '../host/tasks.mjs'
 
 const VIEW_KEYS = [
   'id', 'kind', 'direction', 'peerId', 'phase', 'done', 'total', 'bytes',
-  'totalBytes', 'detail', 'startedAt', 'finishedAt', 'error', 'result',
+  'totalBytes', 'detail', 'progressFailures', 'startedAt', 'finishedAt', 'error', 'result',
 ].sort()
 
 let passed = 0

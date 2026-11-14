@@ -19,8 +19,9 @@ export { CACHE_LIMIT }
 
 
 export class PackCache {
-  constructor(file) {
+  constructor(file, { logger = null } = {}) {
     this.file = file
+    this.logger = logger
     this.map = new Map()
     this.dirty = false
     this.timer = null
@@ -65,16 +66,28 @@ export class PackCache {
     if (this.timer) return
     this.timer = setTimeout(() => {
       this.timer = null
-      this.flush().catch(() => {})
+      this.flush().catch((err) => {
+        this.logger?.warnOnce?.('pack-cache-write', 'cache', `哈希缓存写盘失败：${err?.message ?? err}`)
+      })
     }, 1500)
     this.timer.unref?.()
   }
   async flush() {
     if (!this.dirty) return
-    this.dirty = false
     const obj = {}
     for (const [k, v] of this.map) obj[k] = v
-    await writeJson(this.file, obj).catch(() => {})
+    this.dirty = false
+    try {
+      await writeJson(this.file, obj)
+    } catch (err) {
+      // 写不进去不致命，但下次同步会白算一遍全部哈希——留条痕迹，别让人以为「缓存明明开了」。
+      this.dirty = true
+      this.logger?.warnOnce?.(
+        'pack-cache-write',
+        'cache',
+        `哈希缓存写盘失败（${err?.code ?? err?.message ?? err}）：${this.file}。下次同步会重新计算一遍哈希。`,
+      )
+    }
   }
   async close() {
     if (this.timer) clearTimeout(this.timer)

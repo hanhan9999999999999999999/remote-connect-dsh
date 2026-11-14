@@ -40,7 +40,9 @@ export class LinkService {
     const cfg = await this.store.load()
     await this.peerStore.load()
     await fsp.mkdir(dataHome(), { recursive: true }).catch(() => {})
-    this.packCache = await new PackCache(path.join(dataHome(), 'hash-cache.json')).load()
+    this.packCache = await new PackCache(path.join(dataHome(), 'hash-cache.json'), {
+      logger: this.logger,
+    }).load()
     this.localApplier = new Applier({
       logger: this.logger,
       dataHome: dataHome(),
@@ -63,7 +65,14 @@ export class LinkService {
               lastSeen: Date.now(),
               direction: 'inbound',
             })
-            .catch(() => {})
+            .catch((err) => {
+              // 记不下来就等于「对方连上过，但重启后列表里没有它」——留一条痕迹。
+              this.logger.warnOnce(
+                `inbound-upsert:${e.device.id}`,
+                'service',
+                `记下入站设备失败（${e.device.name}）：${err?.message ?? err}`,
+              )
+            })
         }
       },
     })
@@ -87,8 +96,14 @@ export class LinkService {
       try {
         const peer = await this.#peer(item.id)
         await peer.restore()
-      } catch {
-        /* offline peers are expected */
+      } catch (err) {
+        // 对端离线是常态，但「恢复失败」和「本来就没连」不是一回事：
+        // 前者要看得出来，否则用户只会觉得「明明勾了自动重连，却没连上」。
+        this.logger.warnOnce(
+          `restore:${item.id}`,
+          'service',
+          `恢复与「${item.name ?? item.id}」的会话失败：${err?.message ?? err}`,
+        )
       }
     }
   }
@@ -426,6 +441,10 @@ export class LinkService {
       if (typeof bytes === 'number') task.bytes = bytes
       const current = p.current ?? p.remote?.current
       if (current) task.detail = current
+      // 进度查询失败过几次：同步照样会成功，但界面上得说得出「进度可能不准」。
+      if (typeof p.progressFailures === 'number' && p.progressFailures > 0) {
+        task.progressFailures = p.progressFailures
+      }
     }
     if (task.direction === 'push') {
       task.phase = 'hashing'

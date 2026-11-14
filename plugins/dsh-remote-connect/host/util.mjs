@@ -11,7 +11,7 @@ import path from 'node:path'
 export const APP_ID = 'dsh-remote-connect'
 export const APP_NAME = '远程互联'
 export const PROTOCOL = 'dsh-link/v1'
-export const VERSION = '1.0.38'
+export const VERSION = '1.0.39'
 
 /** @returns {string} */
 export function rid(bytes = 12) {
@@ -199,6 +199,7 @@ export class Logger {
     this.file = file
     this.entries = []
     this.stream = null
+    this.seenOnce = new Set()
   }
   #push(level, scope, msg, extra) {
     const entry = { t: Date.now(), level, scope, msg: String(msg), ...(extra ? { extra } : {}) }
@@ -222,6 +223,18 @@ export class Logger {
   }
   error(scope, msg, extra) {
     return this.#push('error', scope, msg, extra)
+  }
+  /**
+   * 同一个 key 只记一条警告。
+   *
+   * 「尽力而为」的分支（进度查询、缓存写盘、恢复会话…）出错时不该刷屏，
+   * 但也不该像以前那样彻底静默——一次 401 就这样藏了两个版本，
+   * 现场只表现为「进度条一直不动」。第一次出错必须留下痕迹。
+   */
+  warnOnce(key, scope, msg, extra) {
+    if (this.seenOnce.has(key)) return null
+    this.seenOnce.add(key)
+    return this.#push('warn', scope, msg, extra)
   }
   list(limit = 200) {
     return this.entries.slice(-limit)

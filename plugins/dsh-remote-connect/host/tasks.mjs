@@ -28,6 +28,8 @@ export function newTask({ kind = 'sync', direction = 'push', peerId } = {}) {
     error: null,
     result: null,
     detail: '',
+    // 进度查询失败了几次：同步照样能成功，但界面上该说得出「进度可能不准」。
+    progressFailures: 0,
   }
 }
 
@@ -44,6 +46,7 @@ export function taskView(t) {
     bytes: t.bytes,
     totalBytes: t.totalBytes,
     detail: t.detail,
+    progressFailures: t.progressFailures ?? 0,
     startedAt: t.startedAt,
     finishedAt: t.finishedAt,
     error: t.error,
