@@ -1,5 +1,7 @@
 # dsh-remote-connect
 
+[![test](https://github.com/hanhan9999999999999999999/remote-connect-dsh/actions/workflows/test.yml/badge.svg)](https://github.com/hanhan9999999999999999999/remote-connect-dsh/actions/workflows/test.yml)
+
 > DSH 插件：**用手机远程操作电脑上的 DSH**，以及**两台电脑之间互相同步**插件 / 技能 / 规则 / 配置 / 会话。
 
 装在 DSH 里之后，设置页会多出一个 **「远程互联」** 分区，两个能力都在里面。
@@ -149,10 +151,13 @@ plugins/dsh-remote-connect/
 
 ```powershell
 cd plugins/dsh-remote-connect
-node test/run-all.mjs
+node test/run-all.mjs          # 插件全套（约 10 秒）
+node ../../tools/validate-index.mjs   # 市场索引校验（无依赖）
 ```
 
 包含：客户端冒烟（插槽/文案/顺序）、清单守卫（`files` 与实际文件一致）、依赖声明、路由（35 条断言 + 手机通道 5 条）、端到端（health / pull / push / rollback）。全部用临时目录，不碰你真机的数据。
+
+CI 在 `.github/workflows/test.yml`：ubuntu + windows × node 20/22，克隆下来就能看到结果；索引校验与插件测试都会跑。
 
 改完插件后的发版流程（改版本 → 提代码 → 拿 SHA → 更新 `index.json` → 校验 → 实装验证 → 社区市场提 PR）写在 [RELEASING.md](RELEASING.md)。
 

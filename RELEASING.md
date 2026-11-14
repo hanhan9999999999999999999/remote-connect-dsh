@@ -141,7 +141,20 @@ node test/run-all.mjs          # 必须全绿：client-smoke / inventory / deps 
 
 ## 5. 校验脚本
 
-存成 `%TEMP%\validate-index.mjs`（`parseMarketIndex` 第二个参数是**索引 URL 字符串**，不是对象）：
+两道，第一道在仓库里、谁都能跑，第二道用 DSH 自己的解析器验真。
+
+### 第一道：`tools/validate-index.mjs`（无依赖）
+
+```powershell
+node tools/validate-index.mjs                 # 默认校验仓库根的 index.json
+node tools/validate-index.mjs 别的索引.json    # 也可以指定文件
+```
+
+它按 format 1 的规则查：`format === 1`、包名正则、`metadata.categories/labels` 必须是 `{title:{zh,en}}` 且插件引用的 id 已声明、git 源必须 https + 40 位小写 commit、`path` 每段合法、以及**文件不能带 BOM**。CI 里也跑这一条（`.github/workflows/test.yml`）。
+
+### 第二道：DSH 真实解析器（`parseMarketIndex`）
+
+第二个参数是**索引 URL 字符串**，不是对象：
 
 ```js
 import { parseMarketIndex } from 'file:///D:/DSH/DSH%20NEXT/resources/app/node_modules/@deepseek-ai/dsh-plugin-market-index/lib/index.js'
@@ -151,6 +164,8 @@ const idx = parseMarketIndex(JSON.parse(text), 'https://raw.githubusercontent.co
 console.log('ok format=' + idx.format + ' plugins=' + idx.plugins.length)
 for (const p of idx.plugins) for (const v of p.versions) console.log(' ', p.name, v.version, JSON.stringify(v.source))
 ```
+
+第三道是实装：见第 3 节的 pnpm 验证，装完 `node -e "import('dsh-remote-connect')"` 能拿到 `apply/id/inject` 才算通。
 
 ---
 
