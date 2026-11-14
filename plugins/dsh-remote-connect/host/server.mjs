@@ -282,6 +282,15 @@ export class LinkServer {
       const syncId = sub.slice('/apply/'.length)
       return this.#receiveApply(req, res, syncId, session)
     }
+    if (req.method === 'DELETE' && sub.startsWith('/apply/')) {
+      // 对端建了批次却一个字节都没发：让它把这条落成终态，
+      // 否则面板上会挂着一个永远停在「接收中」的批次。
+      const syncId = sub.slice('/apply/'.length)
+      const reason = (url.searchParams.get('reason') ?? '').slice(0, 200) || '对端取消了这次同步'
+      const r = this.applier.discard(syncId, reason)
+      if (!r.ok) return this.#error(res, session, 404, 'SYNC_UNKNOWN', '同步任务不存在')
+      return this.#enc(res, session, r)
+    }
     if (req.method === 'GET' && sub === '/progress') {
       const syncId = url.searchParams.get('syncId') ?? ''
       const p = this.applier.progress(syncId)

@@ -220,8 +220,27 @@ await expect('下载不存在的清单：404 PACK_UNKNOWN', async () => {
   }
 })
 
+// 6) DELETE /apply/<syncId> 是「这次推送作废」的通路：不存在的批次 404 SYNC_UNKNOWN
+await expect('撤回一条不存在的批次：404 SYNC_UNKNOWN', async () => {
+  const { server, port } = await startServer()
+  try {
+    const session = addSession(server)
+    const target = '/dsh-link/v1/apply/nope?reason=x'
+    const r = await request(port, {
+      method: 'DELETE',
+      path: target,
+      headers: signedHeaders(session, { method: 'DELETE', target }),
+    })
+    assert(r.status === 404, `应回 404，实际 ${r.status}`)
+    const payload = decryptJson(session.sk, JSON.parse(r.text))
+    assert(payload?.error?.code === 'SYNC_UNKNOWN', `应带 SYNC_UNKNOWN，实际 ` + JSON.stringify(payload).slice(0, 160))
+  } finally {
+    await server.stop().catch(() => {})
+  }
+})
+
 await fs.rm(home, { recursive: true, force: true }).catch(() => {})
 console.log(
-  `server-auth ok · 5 项断言 · 先验令牌 / 缺签名 / 过期会话 / 批次不存在 / 清单不存在（${pass} 通过、${fail} 失败）`,
+  `server-auth ok · ${pass} 项断言 · 先验令牌 / 缺签名 / 过期会话 / 批次不存在 / 清单不存在 / 撤回批次（${pass} 通过、${fail} 失败）`,
 )
 process.exit(fail > 0 ? 1 : 0)

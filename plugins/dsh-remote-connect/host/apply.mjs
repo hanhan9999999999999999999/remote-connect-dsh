@@ -95,6 +95,25 @@ export class Applier {
     return state
   }
 
+  /**
+   * 扔掉一个还没真正开始的批次（对端 prepare 完就走了，或我在开流之前失败）。
+   * 不落终态的话，这条记录会永远停在「接收中」：`#trimStates` 只收 done/failed，
+   * 于是面板上一直挂着一个永远不动的批次，用户也没有地方取消它。
+   */
+  discard(syncId, reason = '对端取消了这次同步') {
+    const state = this.syncs.get(syncId)
+    if (!state) return { ok: false, code: 'SYNC_UNKNOWN', syncId }
+    if (state.phase === 'done' || state.phase === 'failed') {
+      return { ok: true, already: true, syncId, phase: state.phase }
+    }
+    state.phase = 'failed'
+    state.error = String(reason).slice(0, 200)
+    state.finishedAt = Date.now()
+    this.onEvent?.({ type: 'apply-discarded', syncId, reason: state.error })
+    this.#invalidateRecent()
+    return { ok: true, syncId, phase: state.phase }
+  }
+
   get(syncId) {
     return this.syncs.get(syncId) ?? null
   }

@@ -339,25 +339,45 @@ export class RemotePeer {
       meta: { totalBytes: prep.totalBytes, totalFiles: prep.files },
     })
     state.onTick = () => onProgress?.({ phase: 'applying', ...applier.progress(state.id), total: prep.totalBytes })
-    const res = await this.#request({
-      method: 'GET',
-      path: `/export/${prep.packId}`,
-      headers: this.#signedHeaders('GET', `/export/${prep.packId}`, Buffer.alloc(0)),
-      timeoutMs: 0,
-    })
-    if (res.statusCode !== 200) {
-      const err = await this.#jsonFrom(res, false)
-      throw new AppError(err?.error?.code ?? 'EXPORT_FAILED', err?.error?.message ?? '对端拒绝导出')
+    let res
+    try {
+      res = await this.#request({
+        method: 'GET',
+        path: `/export/${prep.packId}`,
+        headers: this.#signedHeaders('GET', `/export/${prep.packId}`, Buffer.alloc(0)),
+        timeoutMs: 0,
+      })
+      if (res.statusCode !== 200) {
+        const err = await this.#jsonFrom(res, false)
+        throw new AppError(err?.error?.code ?? 'EXPORT_FAILED', err?.error?.message ?? '对端拒绝导出')
+      }
+    } catch (err) {
+      // 批次已经建好了却没收到任何东西：不收尾的话它会永远停在「接收中」——
+      // #trimStates 只收 done/failed，面板上就挂着一个永远不动的批次。
+      await this.#discardLocal(applier, state.id, `拉取没能开始：${err?.message ?? err}`)
+      throw err
     }
     const link = decodeFrames(res, this.session.sk)
     try {
       const result = await applier.applyStream(state.id, link.stream)
       onProgress?.({ phase: 'done', ...result, totalBytes: Number(result?.bytes ?? prep.totalBytes ?? 0) })
       return { ...result, manifest: prep.manifest }
+    } catch (err) {
+      await this.#discardLocal(applier, state.id, `拉取失败：${err?.message ?? err}`)
+      throw err
     } finally {
       // 不管成没成都把这条下载流关掉：失败时（路径越界、校验不符、超限……）
       // 对端还在继续往外传，不 destroy 的话 socket 会一直占着，几 GB 的包会在后台继续往本机淌。
       link.destroy()
+    }
+  }
+
+  /** 尽力把本地批次落成终态，失败不影响要抛出去的那个错。 */
+  async #discardLocal(applier, syncId, reason) {
+    try {
+      await applier?.discard?.(syncId, reason)
+    } catch {
+      /* 收尾失败不该盖掉原始错误 */
     }
   }
 
@@ -435,6 +455,11 @@ export class RemotePeer {
       const result = await this.#jsonFrom(res)
       onProgress?.({ phase: 'done', done: totalBytes, total: totalBytes, result, progressFailures })
       return result
+    } catch (err) {
+      // 对端已经建了批次却一个字节都没收到：告诉它把这个批次收掉，
+      // 否则它那边会一直挂着一个停在「接收中」的任务。
+      await this.#cancelRemote(syncId, err?.message ?? String(err))
+      throw err
     } finally {
       stopped = true
       if (timer) clearTimeout(timer)
@@ -446,6 +471,17 @@ export class RemotePeer {
 
   async listSyncs() {
     return this.requestJson('GET', '/syncs', { timeoutMs: 20_000 })
+  }
+
+  /** 告诉对端「这次推送作废」（尽力而为，失败不抛）。 */
+  async #cancelRemote(syncId, reason) {
+    try {
+      await this.requestJson('DELETE', `/apply/${encodeURIComponent(syncId)}?reason=${encodeURIComponent(String(reason).slice(0, 120))}`, {
+        timeoutMs: 5000,
+      })
+    } catch {
+      /* 对端收不到就等它自己过期；这条不该盖掉推送本身的错 */
+    }
   }
 
   async rollback(syncId) {
