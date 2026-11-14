@@ -66,7 +66,10 @@ await ok('时钟偏移 5 分钟、失败 10 次锁 10 分钟，与文档一致',
 
 await ok('nonce 窗口 10 分钟，与文档一致', async () => {
   assert.ok(guard.includes('NONCE_WINDOW_MS = 10 * 60 * 1000'), 'guard.mjs 里找不到 nonce 10 分钟窗口')
-  assert.ok(server.includes('NONCE_WINDOW_MS'), 'server.mjs 的 #prune 没用上 NONCE_WINDOW_MS')
+  // 1.0.59 起重放表搬进 guard.mjs 的 NonceStore（带窗口清理与上限），server 只负责调用
+  assert.ok(guard.includes('class NonceStore'), 'guard.mjs 里找不到 NonceStore')
+  assert.ok(server.includes('new NonceStore('), 'server.mjs 没用 NonceStore 管重放表')
+  assert.ok(server.includes('this.nonces.take('), 'server.mjs 没调用 nonces.take()')
   assert.ok(doc.includes('10 分钟窗口内只能使用一次'), '文档没写 nonce 窗口')
 })
 

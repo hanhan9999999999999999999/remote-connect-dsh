@@ -21,6 +21,7 @@ const suites = [
   'bridge-dir.mjs',
   'security.mjs',
   'guard.mjs',
+  'guard-limits.mjs',
   'peer-session.mjs',
   'peer-reconnect.mjs',
   'peer-body.mjs',

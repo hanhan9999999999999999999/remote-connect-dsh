@@ -28,7 +28,7 @@ import { PackCache, packStream, preparePack } from './pack.mjs'
 import { Discovery } from './discovery.mjs'
 import { FrameEncoderTransform, decodeFrames } from './frames.mjs'
 import { listProfiles } from './inventory.mjs'
-import { CLOCK_SKEW_MS, FailureTracker, NONCE_WINDOW_MS, clientIp, sanitizeDevice } from './guard.mjs'
+import { CLOCK_SKEW_MS, FailureTracker, NonceStore, clientIp, sanitizeDevice } from './guard.mjs'
 import { signatureBase } from './sign.mjs'
 import { statusFor } from './status.mjs'
 
@@ -60,7 +60,7 @@ function jsonBody(req, limit = MAX_JSON) {
 }
 
 export class LinkServer {
-  constructor({ store, logger, onEvent, idleMs, maxConnections } = {}) {
+  constructor({ store, logger, onEvent, idleMs, maxConnections, nonceMax, failureMax } = {}) {
     this.store = store
     this.logger = logger
     this.onEvent = onEvent
@@ -72,8 +72,9 @@ export class LinkServer {
     this.port = null
     this.sessions = new Map()
     this.challenges = new Map()
-    this.guard = new FailureTracker()
-    this.nonces = new Map()
+    this.guard = new FailureTracker(Number.isInteger(failureMax) && failureMax > 0 ? { max: failureMax } : {})
+    this.nonces = new NonceStore(Number.isInteger(nonceMax) && nonceMax > 0 ? { max: nonceMax } : {})
+    this.prunedAt = 0
     this.packs = new Map()
     this.discovery = null
     this.startedAt = 0
@@ -539,12 +540,11 @@ export class LinkServer {
       return null
     }
     const replayKey = `${token}:${nonce}`
-    if (this.nonces.has(replayKey)) {
+    if (this.nonces.take(replayKey) === 'replay') {
       this.#plain(res, 401, { error: { code: 'REPLAY', message: '请求重复' } })
       return null
     }
-    this.nonces.set(replayKey, Date.now())
-    if (this.nonces.size > 5000) this.#prune()
+    this.#maybePrune()
     session.lastUsed = Date.now()
     return session
   }
@@ -667,9 +667,16 @@ export class LinkServer {
 
   #prune() {
     const now = Date.now()
+    this.prunedAt = now
     for (const [k, v] of this.challenges) if (v.expiresAt < now) this.challenges.delete(k)
-    for (const [k, ts] of this.nonces) if (now - ts > NONCE_WINDOW_MS) this.nonces.delete(k)
+    this.nonces.prune(now, { force: true })
     for (const [k, s] of this.sessions) if (s.expiresAt < now) this.sessions.delete(k)
+  }
+
+  /** 会话/挑战的清理由时间触发（30 秒最多一次），不再挂在「重放表超过 5000 条」上 */
+  #maybePrune() {
+    if (Date.now() - this.prunedAt < 30 * 1000) return
+    this.#prune()
   }
 }
 
