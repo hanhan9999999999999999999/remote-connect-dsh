@@ -641,7 +641,7 @@ window.__ModuleLoader__.load({
       return { toast, notify }
     }
 
-    function DeviceLinkSection(props) {
+    function RemoteConnectSection(props) {
       const t = props && props.t ? props.t : (k) => k
       const [tab, setTab] = useState('overview')
       const [status, setStatus] = useState(null)
@@ -1590,7 +1590,7 @@ window.__ModuleLoader__.load({
               label: () => t('nav'),
               locale: NS,
             },
-            DeviceLinkSection,
+            RemoteConnectSection,
           ),
         )
         ctx.slots.inject('settings.section.icon', () =>

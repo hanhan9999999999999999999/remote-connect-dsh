@@ -11,6 +11,7 @@
  */
 import { execFile, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 export const inject = ['webServer'];
@@ -31,10 +32,10 @@ export const __test = {
 
 /**
  * 桥接目录不写死。优先级：
- *   `configure({ bridgeDir })` > 环境变量 `DSH_PHONE_BRIDGE_DIR` > 自动探测 > 旧默认路径。
+ *   `configure({ bridgeDir })` > 环境变量 `DSH_PHONE_BRIDGE_DIR` > 自动探测 > 第一个候选目录。
  * 自动探测依次看：`$DSH_HOME/phone-bridge`、当前工作目录下的 `phone-bridge`、
- * 以及 DSH 安装目录旁边的 `phone-bridge`——谁先真的存在就用谁，都不用就落在旧默认路径上，
- * 面板会显示「还没装手机通道」而不是抛一堆 ENOENT。
+ * 以及用户主目录下的 `phone-bridge`——谁先真的存在就用谁；都不用就落在第一个候选上，
+ * 面板会显示「还没装手机通道」并给出它实际找过的路径，而不是抛一堆 ENOENT。
  */
 function probeBridgeDir() {
   const fromEnv = process.env.DSH_PHONE_BRIDGE_DIR;
@@ -49,12 +50,15 @@ function probeBridgeDir() {
   const candidates = [];
   if (process.env.DSH_HOME) candidates.push(path.join(process.env.DSH_HOME, 'phone-bridge'));
   candidates.push(path.join(process.cwd(), 'phone-bridge'));
-  const legacy = 'D:/document/Remote Connect DSH/phone-bridge';
-  candidates.push(legacy);
+  try {
+    candidates.push(path.join(os.homedir(), 'phone-bridge'));
+  } catch {
+    // 拿不到主目录就少一个候选，不影响前面的
+  }
   for (const dir of candidates) {
     if (looksInstalled(dir)) return path.resolve(dir);
   }
-  return path.resolve(candidates[0] ?? legacy);
+  return path.resolve(candidates[0]);
 }
 
 let BRIDGE_DIR = '';

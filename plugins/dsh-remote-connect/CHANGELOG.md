@@ -21,13 +21,18 @@
 ### 新增
 
 - **`bridgeDir` 可配置**：`host/phone.mjs` 里的桥接路径从硬编码常量改成
-  `config.bridgeDir` / `config.dir` / 环境变量 `DSH_PHONE_BRIDGE_DIR` / **自动探测** / 旧默认路径。
-  自动探测依次认 `$DSH_HOME/phone-bridge`、`./phone-bridge`（只认里面真有
+  `config.bridgeDir` / `config.dir` / 环境变量 `DSH_PHONE_BRIDGE_DIR` / **自动探测** / 第一个候选目录。
+  自动探测依次认 `$DSH_HOME/phone-bridge`、`./phone-bridge`、`~/phone-bridge`（只认里面真有
   `ensure-running.ps1` 或 `server.mjs` 的），所以别人把 `phone-bridge/` 放对位置就不用配置；
   对应测试 `test/bridge-dir.mjs`。
 - **`installed()` / `installed` 字段**：手机通道页签能区分「没装 phone-bridge」和「装了但没起来」，
   前者给安装提示与它实际找的路径，后者才是错误。
 - **`docs/PHONE.md`**：手机通道的目录要求、配置项、接口、状态字段、怎么停用。
+
+### 修复
+
+- `host/phone.mjs` 里去掉了写死的开发机路径（原回落里那条 `D:/…/phone-bridge`），
+  改成用户主目录下的 `phone-bridge`，公开包里不再带任何一台具体机器的目录。
 
 ### 继承自 0.1.0
 
@@ -50,4 +55,6 @@
 
 ### 测试
 
-- `node test/run-all.mjs`：host 单测全绿；`test/client-smoke.mjs` 校验 142 个中英词条对齐。
+- `node test/run-all.mjs`：host 单测全绿；`test/client-smoke.mjs` 校验 153 个中英词条对齐。
+- `test/docs-guard.mjs`：路由 / 版本号 / locale / 绝对路径 / `files[]` / 相对链接六项文档守卫，
+  代码改了文档没跟上就红。

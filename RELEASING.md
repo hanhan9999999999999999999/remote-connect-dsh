@@ -1,8 +1,8 @@
 # 发布手册（合并 / 发版 / 上架）
 
 这份文件只记一件事：**插件改动以后，怎么安全地合并、发版、上架**。
-本机那套 `D:\document\Remote Connect DSH` 里跑的是主人自己维护的完整版本，
-**不要往里装这个发布包**，两边互不影响，只做单向同步（源码 → 发布仓）。
+维护者本机有两套目录：一套是自己在用的完整项目（下称「主项目」），一套是这个发布仓。
+**不要往主项目里装这个发布包**，两边互不影响，只做单向同步（主项目 → 发布仓）。
 
 ---
 
@@ -10,8 +10,8 @@
 
 | 目录 | 角色 |
 | --- | --- |
-| `D:\document\Remote Connect DSH\` | 主人自己在用的完整项目（不动它、不装发行包） |
-| `D:\document\dsh-plugins-market\` | **发布仓**，对应 GitHub `hanhan9999999999999999999/remote-connect-dsh` |
+| `<主项目>/` | 维护者自己用的完整项目（不动它、不装发行包） |
+| `<发布仓>/` | **发布仓**，对应 GitHub `hanhan9999999999999999999/remote-connect-dsh` |
 
 发布仓结构：
 
@@ -25,13 +25,13 @@ plugins/dsh-remote-connect/      唯一插件包
 ## 1. 同步源码（单向）
 
 ```powershell
-$src = 'D:\document\Remote Connect DSH\plugins'   # 各插件源码所在
-$dst = 'D:\document\dsh-plugins-market\plugins\dsh-remote-connect'
-robocopy $src\dsh-device-link $dst /E /XD node_modules runtime /XF *.bak-* *.log
+$src = '<主项目>\plugins'                                   # 各插件源码所在
+$dst = '<发布仓>\plugins\dsh-remote-connect'
+robocopy $src\dsh-remote-connect $dst /E /XD node_modules runtime /XF *.bak-* *.log
 ```
 
 合并后的包**没有**对应的单一源目录，改动通常是先在发布仓里改，验收后再回写到主项目。
-回写前先备份到 `D:\备份\<时间戳>-<任务名>\`。
+回写前先备份到 `<备份目录>\<时间戳>-<任务名>\`。
 
 ---
 
@@ -51,8 +51,8 @@ robocopy $src\dsh-device-link $dst /E /XD node_modules runtime /XF *.bak-* *.log
 ## 3. 发版流程
 
 ```powershell
-cd 'D:\document\dsh-plugins-market\plugins\dsh-remote-connect'
-node test/run-all.mjs          # 必须全绿：client-smoke / inventory / deps / plugin-smoke / e2e
+cd '<发布仓>\plugins\dsh-remote-connect'
+node test/run-all.mjs          # 必须全绿：client-smoke / inventory-guard / deps / bridge-dir / docs-guard / plugin-smoke / e2e
 ```
 
 1. 改 `package.json` 的 `version`，在 `CHANGELOG.md` 顶部加一节。
@@ -77,17 +77,19 @@ node test/run-all.mjs          # 必须全绿：client-smoke / inventory / deps 
 5. 用真校验器验一遍（不要只靠眼睛）：
 
    ```powershell
-   node "$env:TEMP\validate-index.mjs"    # 见第 5 节
+   node tools/validate-index.mjs          # 在发布仓根目录跑，见第 5 节
    ```
 
 6. 用市场真实参数实装一遍（`npm` 不行，必须 pnpm）：
 
    ```powershell
    $env:http_proxy='http://127.0.0.1:7891'; $env:https_proxy=$env:http_proxy
-   node D:\dsh-home\dsh-runtimes\dsh-next-primary-runtime\dependencies\pnpm\bin\pnpm.mjs `
+   node <pnpm.mjs 路径> `
      --dir $env:TEMP\mk-install-test add `
      "git+https://github.com/hanhan9999999999999999999/remote-connect-dsh.git#<SHA>&path:/plugins/dsh-remote-connect"
    ```
+
+   `<pnpm.mjs 路径>` 取 DSH 自带的那份（`<DSH 安装目录>\dsh-runtimes\*\dependencies\pnpm\bin\pnpm.mjs`），或自己装了 pnpm 就直接 `pnpm add`。
 
 7. 推送（token 只走命令行，不落 `.git/config`、不落 `.git-credentials`）：
 
@@ -154,12 +156,13 @@ node tools/validate-index.mjs 别的索引.json    # 也可以指定文件
 
 ### 第二道：DSH 真实解析器（`parseMarketIndex`）
 
-第二个参数是**索引 URL 字符串**，不是对象：
+第二个参数是**索引 URL 字符串**，不是对象；而第一个参数要**已经 `JSON.parse` 过**——
+直接传文本会报 `$ must be an object`（`path: '$', reason: 'must be an object'`）。
 
 ```js
-import { parseMarketIndex } from 'file:///D:/DSH/DSH%20NEXT/resources/app/node_modules/@deepseek-ai/dsh-plugin-market-index/lib/index.js'
+import { parseMarketIndex } from 'file:///<DSH 安装目录>/resources/app/node_modules/@deepseek-ai/dsh-plugin-market-index/lib/index.js'
 import fs from 'node:fs'
-const text = fs.readFileSync('D:/document/dsh-plugins-market/index.json', 'utf8')
+const text = fs.readFileSync('<发布仓>/index.json', 'utf8')
 const idx = parseMarketIndex(JSON.parse(text), 'https://raw.githubusercontent.com/hanhan9999999999999999999/remote-connect-dsh/main/index.json')
 console.log('ok format=' + idx.format + ' plugins=' + idx.plugins.length)
 for (const p of idx.plugins) for (const v of p.versions) console.log(' ', p.name, v.version, JSON.stringify(v.source))

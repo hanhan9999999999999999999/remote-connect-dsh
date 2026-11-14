@@ -77,8 +77,8 @@ node .\plugins\dsh-remote-connect\scripts\install.mjs
 
 ```
 config.bridgeDir  >  config.dir  >  环境变量 DSH_PHONE_BRIDGE_DIR
-                  >  自动探测（$DSH_HOME/phone-bridge、./phone-bridge）
-                  >  旧默认路径
+                  >  自动探测（$DSH_HOME/phone-bridge、./phone-bridge、~/phone-bridge）
+                  >  第一个候选目录（找不到就显示「还没装手机通道」，不报 ENOENT）
 ```
 
 自动探测只认真的装好的目录（里面有 `ensure-running.ps1` 或 `server.mjs`），所以把 `phone-bridge/` 放在 DSH 数据目录或启动目录旁边就不用配了。
