@@ -39,6 +39,7 @@ const suites = [
   'config.mjs',
   'sync-cancel.mjs',
   'forget-cancel.mjs',
+  'disconnect-hardening.mjs',
   'sync-progress.mjs',
   'diagnostics.mjs',
   'http-status.mjs',

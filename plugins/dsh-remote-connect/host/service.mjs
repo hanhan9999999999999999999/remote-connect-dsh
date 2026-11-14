@@ -291,9 +291,13 @@ export class LinkService {
   async disconnect(id) {
     this.#cancelTasksOf(id, '已断开')
     const peer = this.clients.get(id)
-    if (peer) {
-      await peer.disconnect()
-      this.clients.delete(id)
+    // 先摘掉，再跟对端告别：告别这一步失败（对端没答话、连接已经烂了）不能把
+    // 本地状态卡在「还连着」——token 会一直躺在 peers.json 里，界面也一直显示已连接。
+    this.clients.delete(id)
+    try {
+      await peer?.disconnect?.()
+    } catch (err) {
+      this.logger.warn('peer', `跟对端告别时出错，按断开处理：${err?.message ?? err}`)
     }
     await this.peerStore.clearSession(id)
     return { ok: true }
@@ -302,9 +306,11 @@ export class LinkService {
   async forget(id) {
     this.#cancelTasksOf(id, '已删除')
     const peer = this.clients.get(id)
-    if (peer) {
-      await peer.disconnect().catch(() => {})
-      this.clients.delete(id)
+    this.clients.delete(id)
+    try {
+      await peer?.disconnect?.()
+    } catch (err) {
+      this.logger.warn('peer', `删除前跟对端告别时出错，照常删除：${err?.message ?? err}`)
     }
     await this.peerStore.remove(id)
     return { ok: true }
