@@ -145,13 +145,20 @@ export async function* tarEntries(entries, { signal } = {}) {
       written = entry.bytes.length
     } else {
       const stream = fs.createReadStream(entry.filePath, { highWaterMark: 1024 * 1024 })
-      for await (const chunk of stream) {
-        if (signal?.aborted) {
-          stream.destroy()
-          throw new Error('aborted')
+      try {
+        for await (const chunk of stream) {
+          if (signal?.aborted) {
+            stream.destroy()
+            throw new Error('aborted')
+          }
+          written += chunk.length
+          yield chunk
         }
-        written += chunk.length
-        yield chunk
+      } catch (err) {
+        // 扫描之后、发送之前被人删了/锁了：给出能照着处理的说法，而不是裸 ENOENT
+        if (err?.message === 'aborted') throw err
+        const reason = err?.code ?? err?.message ?? '未知错误'
+        throw new Error(`读不到 ${name}：${reason}（可能在打包期间被删除或被其它程序占用）`)
       }
     }
     if (written !== entry.size) {

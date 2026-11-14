@@ -2,6 +2,17 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.34 — 2026-11-15
+
+### 修复
+
+- **打包途中源文件被删/被独占锁，会把整个进程抛死**：`packStream()` 以前是 `Readable.from(tarEntries(...)).pipe(createGzip())` —— `.pipe()` 不会把源上的错误传给下游，源上的 `'error'` 又没人接，于是 `ENOENT` 直接成了未捕获异常（实测 `UNCAUGHT: ENOENT: no such file or directory, open '…\skills\b.md'`）。改成 `pipeline()`：错误经 gzip 传到调用方，同步任务正常落成 `failed`。
+- **这种情况的错误信息原先不可读**：现在 `tarEntries` 会把它换成「读不到 `skills/b.md`：ENOENT（可能在打包期间被删除或被其它程序占用）」。
+
+### 新增
+
+- `test/pack.mjs` 加一项：打包途中把源文件删掉，`packStream()` 必须 reject（而不是把进程抛死）。
+
 ## 1.0.33 — 2026-11-15
 
 ### 修复

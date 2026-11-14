@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { createGzip } from 'node:zlib'
-import { Readable } from 'node:stream'
+import { Readable, pipeline } from 'node:stream'
 import { tarEntries } from './tar.mjs'
 import { scanAll, manifestId } from './inventory.mjs'
 import { AppError, readJson, writeJson } from './util.mjs'
@@ -149,8 +149,10 @@ export async function preparePack({ cats, includeSecrets = false, maxFileMb = 51
 }
 
 /** Readable tar.gz from a prepared pack (virtual entries supported). */
-export function packStream(entries) {
-  return Readable.from(tarEntries(entries.map(toTarEntry))).pipe(createGzip({ level: 6 }))
+export function packStream(entries, { signal } = {}) {
+  // 必须用 pipeline 而不是 .pipe()：源上出错（打包途中有文件被删/被独占锁）时，
+  // .pipe() 不会把错误传给 gzip，源上的 'error' 没人接 —— 整个进程会被抛死。
+  return pipeline(Readable.from(tarEntries(entries.map(toTarEntry), { signal })), createGzip({ level: 6 }), () => {})
 }
 
 function toTarEntry(entry) {

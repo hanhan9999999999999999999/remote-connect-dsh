@@ -127,5 +127,18 @@ await ok('packStream 产出的是 gzip 包着的 tar', async () => {
   assert.ok(text.includes('skills/b.txt'))
 })
 
-console.log(`pack ok · 6 项断言 · 缓存键 / 载入裁剪 / 哈希 / 命中 / 早失败 / 打包（${pass} 通过、${fail} 失败）`)
+await ok('打包途中源文件被删：报错而不是把进程抛死', async () => {
+  // 以前 packStream 用 .pipe() 接 gzip：源上出错没人接，ENOENT 直接把进程抛死。
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'rc-pack-gone-'))
+  await fs.mkdir(path.join(dir, 'skills'), { recursive: true })
+  await fs.writeFile(path.join(dir, 'skills', 'gone.md'), 'will disappear')
+  process.env.DEVICE_LINK_DSH_HOME = dir
+  const pack = await preparePack({ cats: ['skills'] })
+  await fs.rm(path.join(dir, 'skills', 'gone.md'))
+  await assert.rejects(async () => {
+    for await (const chunk of packStream(pack.entries)) void chunk
+  }, /读不到 skills\/gone\.md|ENOENT/)
+})
+
+console.log(`pack ok · ${pass} 项断言 · 缓存键 / 载入裁剪 / 哈希 / 命中 / 早失败 / 打包 / 源文件消失（${pass} 通过、${fail} 失败）`)
 if (fail) process.exit(1)
