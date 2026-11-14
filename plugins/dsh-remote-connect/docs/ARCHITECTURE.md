@@ -20,11 +20,11 @@
 ```
 ┌──────────────────────────── DSH 主进程 ────────────────────────────┐
 │  host/index.js  (cordis 插件)                                      │
-│    ├─ 注册 /dsh-remote-connect/api/*   ← 设置页调用（同源 HTTP）       │
+│    ├─ 注册 /dsh-remote-connect-api/*   ← 设置页调用（同源 HTTP）      │
 │    ├─ LinkService（单例）                                          │
-│    │    ├─ SyncServer   :8788   TCP HTTP + UDP 发现                 │
-│    │    ├─ PeerClient   连接远端 SyncServer                         │
-│    │    ├─ Inventory    扫描 ~/.dsh → 分类清单                      │
+│    │    ├─ LinkServer   :8788   TCP HTTP + UDP 发现                 │
+│    │    ├─ RemotePeer   连接远端 LinkServer                         │
+│    │    ├─ Inventory    扫描 $DSH_HOME → 分类清单                   │
 │    │    ├─ Archiver     纯 JS tar + gzip（无依赖）                  │
 │    │    └─ Applier      暂存 → 校验 → 备份 → 落盘 → 日志/回滚       │
 │    └─ 日志环 / 任务表 / 配置                                       │
@@ -47,7 +47,7 @@
 
 三层，层层独立：
 
-1. **连接密码**：默认随机生成 6 组 4 字符（`XXXX-XXXX-XXXX`），可改成任意自定义密码。
+1. **连接密码**：默认随机生成 3 组 4 字符（`XXXX-XXXX-XXXX`，字母表 `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`，不含易混的 `I/O/0/1`），可改成任意自定义密码。
    派生 `scrypt(password, salt, N=2^14, r=8, p=1)` → 32 字节主密钥 `K`。
    `K` 从不落盘、从不上线；salt 存在本机配置里。
 2. **握手**：`hello` 双向挑战（`clientNonce` / `serverNonce`），客户端提交
@@ -59,24 +59,28 @@
 
 附加约束：
 
-- 密码错误按 IP 指数退避（1s→2s→4s…上限 60s），连续失败 10 次锁 10 分钟；
+- 密码错误按 IP 计数，连续失败 10 次锁 10 分钟（成功认证即清零；没有指数退避）；
 - 所有路径在服务端二次校验（拒绝 `..`、绝对路径、盘符、保留名）；
 - 单文件上限 512 MB、单次同步上限 8 GB（可配置），超出在清单阶段就拒绝；
-- 默认**不传输** `.credentials.yaml`、`.dshw-api.json`、`model_config.json`、`*.pem`、`*.key`、
-  `node_modules/`、`.git/`、日志、缓存；开启「包含凭据」需二次确认，且会在同步报告里单独标注。
+- 默认**不传输**（`host/inventory.mjs` 里的 `SECRET_FILE` / `ALWAYS_EXCLUDE_*`）：
+  `.credentials.yaml`、`.dshw-api.json`、`model_config.json`、`.env*`、`*.pem|key|p12|pfx`、
+  `id_rsa|ed25519|ecdsa*`、`.netrc`、`cookies*`；`node_modules/`、`.git/`、`.venv/`、`dist/`、
+  `build/`、`coverage/`、`__pycache__/` 等目录；`*.log|tmp|part|swp|map|lock` 与 `.DS_Store`/`Thumbs.db`。
+- **本插件自己的数据目录永远排除**（`config.json` 存连接密码、`peers.json` 存会话密钥、`backups/` 存别人的旧文件）。
+- 开启「包含凭据」需在同步页显式勾选，且会在同步报告里单独标注。
 
 ## 4. 数据模型
 
 同步内容按**分类**组织，每类有自己的扫描规则与排除规则：
 
-| 分类 | 源路径（相对 `~/.dsh`） | 默认 | 说明 |
+| 分类 | 源路径（相对 `$DSH_HOME`） | 默认 | 说明 |
 | --- | --- | --- | --- |
-| `skills` | `skills/**`、`skills-index.md`、`skills-manifest.json`、`skills-sync.mjs` | 开 | 排除 `node_modules`、`.git`、>64MB 资源 |
+| `skills` | `skills/**`、`skills-index.md`、`skills-manifest.json`、`skills-sync.mjs` | 开 | 排除 `node_modules`、`.git`、超过单文件上限的资源 |
 | `rules` | `prompt-inject.md`、`prompt-reminder.md`、`cordis.patch.yml`、`.agent-presets/**` | 开 | 本地条款/预设 |
 | `plugins` | `plugins/**`（排除 `node_modules`/`.git`/模型）+ profile 的 `package.json` 依赖与 `bundles` | 开 | 只同步**源码级**插件；注册表依赖生成「依赖清单」供对端一键补齐 |
-| `config` | `profiles/*/cordis.yml`、`cordis.patch.yml`、`storages/**`（排除缓存）、若干 `*.json` 偏好 | 开 | 排除 `storages/session_projcache` |
+| `config` | `profiles/**`、`storages/**`、`task-board`、`pet.json`、`tts.json`、`voice.json`、`asr.json`、`watch.json`、`see-now.json`、`dsh.json`、`dsh.config.json`、`settings.json` | 开 | 排除 `storages/session_projcache` |
 | `sessions` | `sessions/**` | 开 | 会话存档（对话记录），保留工作区目录编码与 `session-*` 结构 |
-| `plugin-data` | `plugins-data/**`、`meow-memory/`、`memory-nebula/*.db` 等小型数据 | 关 | 体积不可控，默认关，逐项勾选 |
+| `plugin-data` | `plugins-data/**`、`meow-memory/**`、`memory-nebula/**`、`dsh-see-now/**` | 关 | 体积不可控，默认关，逐项勾选 |
 
 清单条目：
 
@@ -96,36 +100,64 @@
 
 ### 5.1 服务端（被连接的一侧）
 
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET | `/dsh-link/v1/health` | 公开：版本、设备名、是否设密码、分类摘要（不含密钥） |
-| POST | `/dsh-link/v1/hello` | 挑战应答，返回 `{token, expiresAt, server:{…}}` |
-| GET | `/dsh-link/v1/inventory?cats=skills,rules` | 加密响应：清单 + 统计 |
-| POST | `/dsh-link/v1/export` | 请求体 `{cats, manifestId}`；响应为 `tar.gz` 流（加密信封） |
-| POST | `/dsh-link/v1/apply` | 请求体为 `tar.gz` 流；返回 `{syncId}`，进度由 `/progress` 查询 |
-| GET | `/dsh-link/v1/progress?syncId=` | 应用进度（已写字节/总字节/当前文件） |
-| POST | `/dsh-link/v1/rollback` | `{syncId}` 回滚一次应用 |
-| GET | `/dsh-link/v1/ping` | 已认证心跳 |
+前缀 `/dsh-link/v1`（`host/server.mjs` 的 `BASE`）。除 `/health` 外都要带会话签名，响应体是 GCM 信封。
+
+| 方法 | 路径 | 认证 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/health` | 公开 | 版本、协议、设备名、是否设密码、分类摘要（不含密钥） |
+| POST | `/hello` | 公开 | 提交 `deviceId`，返回 `salt`、KDF 参数、`serverNonce`、挑战 id |
+| POST | `/hello/verify` | 公开 | 提交 `HMAC(K, …)` 证明，返回会话令牌与 `expiresAt` |
+| GET | `/ping` | 会话 | 心跳，返回 `{ok, t, device}` |
+| POST | `/inventory` | 会话 | 请求体 `{cats, includeSecrets?}`；返回清单 + 统计 |
+| POST | `/export/prepare` | 会话 | 请求体 `{cats, manifestId}`；返回 `{packId, …}` |
+| GET | `/export/<packId>` | 会话 | 逐帧加密的 `tar.gz` 流 |
+| POST | `/apply/prepare` | 会话 | 建一次本地应用任务，返回 `{syncId}` |
+| PUT/POST | `/apply/<syncId>` | 会话 | 上传逐帧加密的 `tar.gz` 流（单请求上限 1 GB） |
+| GET | `/progress?syncId=` | 会话 | 应用进度（已写字节/总字节/当前文件） |
+| GET | `/syncs` | 会话 | 本机最近 20 次应用记录 |
+| POST | `/rollback` | 会话 | `{syncId}` 回滚一次应用 |
+| POST | `/bye` | 会话 | 主动注销本会话令牌 |
 
 ### 5.2 本机插件路由（设置页用）
 
-`/dsh-remote-connect/api/*`：`status`、`config`、`server/start|stop`、`discover`、`connect`、
-`peers`、`disconnect`、`remote/inventory`、`sync/start`、`sync/progress`、`sync/cancel`、
-`rollback`、`logs`、`phone/*`（转发 phone-bridge）、`diagnostics`。
+前缀 `/dsh-remote-connect-api`（`index.js` 的 `PREFIX`），全部同源、走 DSH 自带的鉴权，共 30 条：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/status` | 本机状态：设备名、端口、对端数、任务 |
+| GET | `/diagnostics` | 依赖/端口/权限等自检 |
+| GET | `/logs` | 最近 300 行日志 |
+| POST | `/config` | 改配置（端口、同步策略等） |
+| GET | `/deps` · POST `/deps/install` | 插件依赖检查 / 补装 |
+| POST | `/device/name` | 改设备名 |
+| POST | `/password/set` · `/password/rotate` | 设密码 / 换密码 |
+| POST | `/server/start` · `/server/stop` | 起停本机 `:8788` 互联服务 |
+| POST | `/discover` · `/connect` | UDP 发现 / 配对连接 |
+| POST | `/peer/disconnect` · `/peer/forget` · `/peer/rename` · `/peer/probe` | 对端管理 |
+| POST | `/inventory` · `/sync` | 列可同步内容 / 发起同步 |
+| POST | `/task/status` · `/task/cancel` | 同步任务进度 / 取消 |
+| POST | `/local/syncs` · `/local/rollback` | 本机应用记录 / 回滚 |
+| POST | `/remote/syncs` · `/remote/rollback` | 对端记录 / 让对方回滚 |
+| GET | `/phone/status` · `/phone/port` · `/phone/paircode` | 手机通道状态（同进程直连，不走回环） |
+| POST | `/phone/start` · `/phone/stop` | 手机通道启停 |
+
+手机通道自己还注册了 5 条 `/dsh-phone-api/*`（`status`、`start`、`stop`、`port`、`paircode`），
+供桥接侧和调试脚本直接调用。
 
 ## 6. 失败与恢复
 
 | 场景 | 处理 |
 | --- | --- |
-| 端口被占 | 启动前探测；占用则报出占用者 PID/名称，并建议下一个空闲端口 |
-| 对端离线 | 连接表保留，UI 显示灰点；定时重探（退避 5s→60s） |
-| 传输中断 | 接收端保留 staging 目录与 journal；重连后可 `resume`（按 `sha256` 跳过已传文件） |
-| 应用中断 | 下次启动扫描 `journal.json`，提示「上次同步未完成，可回滚」 |
-| 磁盘不足 | 清单阶段检查可用空间（`statfs` 不可用时跳过并提示） |
+| 端口被占 | 启动前绑定探测（`server.mjs` 的 `start()`）；`EADDRINUSE` 报 `PORT_IN_USE` 并带上失败原因，换端口改 `server.port` |
+| 对端离线 | 会话令牌 12 小时过期，之后要重新握手；设置页每 6 秒拉一次状态，连不上就显示不可达（不做后台自动重连） |
+| 传输中断 | 接收端在 `<data>/syncs/<syncId>/` 留 `staging/` 与逐条 `journal.jsonl`；**没有断点续传**，重连后重新发起一次同步 |
+| 应用中断 | 只有正常收尾才写 `journal.json`；缺它的批次不会出现在 `local/syncs` 里，也就无法回滚——重发一次即可 |
+| 磁盘不足 | `/diagnostics` 的 `disk` 项报可用空间（< 2 GB 标 warn），只提示、不阻断同步 |
 
 ## 7. 兼容性
 
-- 协议带 `v1`，`/health` 返回 `protocol` 与 `app`；不兼容时 UI 明确报「对端版本过旧」。
-- 插件不假设 DSH 内部 API，只用 `slots` 与 `webServer`；两者缺失时降级为「仅引擎」模式
-  （路由不注册，但引擎仍可被脚本调用）。
+- 协议带 `v1`，`/health` 返回 `app`、`protocol` 与 `version`；对端不是本插件或协议不符时报 `NOT_DSH_LINK`，
+  UI 显示「对端不是远程互联服务，或协议版本不兼容」。
+- 插件不碰 DSH 内部 API：host 半只用 `ctx.get('webServer')`（`export const inject = ['webServer']`，
+  没有它插件不会加载），client 半只用 `ctx.slots` 与 `locale`，缺失时设置页不会出现「远程互联」分区。
 - Windows / macOS / Linux 均可运行；路径处理一律走 `node:path` 与 `fileURLToPath`。

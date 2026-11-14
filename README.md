@@ -41,8 +41,14 @@ https://cdn.jsdelivr.net/gh/hanhan9999999999999999999/remote-connect-dsh@main/in
 插件在 monorepo 子目录里，`npm` 装不了（它不支持 git 子目录），用 pnpm：
 
 ```powershell
-pnpm add "git+https://github.com/hanhan9999999999999999999/remote-connect-dsh.git#4d5e98b009bca5342f62e7262089ed4fc83b8e19&path:/plugins/dsh-remote-connect"
+# 钉死 commit（推荐，可复现）——这个 SHA 就是 index.json 里指向的那版
+pnpm add "git+https://github.com/hanhan9999999999999999999/remote-connect-dsh.git#cb19dc6d1edd0254c120a4c77c842c2d594ec37b&path:/plugins/dsh-remote-connect"
+
+# 或者用发行标签
+pnpm add "git+https://github.com/hanhan9999999999999999999/remote-connect-dsh.git#v1.0.0&path:/plugins/dsh-remote-connect"
 ```
+
+改版本后要更新这里的 SHA，别让文档和 `index.json` 各自钉着不同的提交（`RELEASING.md` 第 5 节有检查清单）。
 
 ### 方式三：手动放进 profile
 

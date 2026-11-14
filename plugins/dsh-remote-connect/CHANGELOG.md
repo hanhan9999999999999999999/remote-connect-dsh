@@ -41,6 +41,13 @@
 - 诊断：10 项环境自检、插件依赖体检与显式补装、结构化日志。
 - 安装器 `scripts/install.mjs`：`--dry-run` / `--profile` / `--uninstall` / `--purge`，不重启 DSH。
 
+### 文档
+
+- `docs/ARCHITECTURE.md` 与 `SECURITY.md` 按代码逐条核对后重写：传输端点、30 条本机路由、
+  密码生成规则（3 组 ×4 字符，字母表不含 I/O/0/1）、失败锁定（按 IP，10 次锁 10 分钟，无退避）、
+  异常表（端口占用 / 对端离线 / 传输中断无断点续传 / 缺 `journal.json` 不可回滚 / 磁盘不足仅提示）。
+- `README.md` 的 git 直装命令改钉真实发布提交，不再指向缺 `host/phone.mjs` 的旧提交。
+
 ### 测试
 
 - `node test/run-all.mjs`：host 单测全绿；`test/client-smoke.mjs` 校验 142 个中英词条对齐。
