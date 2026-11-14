@@ -183,7 +183,7 @@ https://raw.githubusercontent.com/hanhan9999999999999999999/remote-connect-dsh/m
 https://cdn.jsdelivr.net/gh/hanhan9999999999999999999/remote-connect-dsh@main/index.json
 ```
 
-推完立刻能用（raw 有几十秒缓存，jsDelivr 更久；改完看 `curl` 的字节数对不对）。
+推完立刻能用（raw 有几十秒缓存）。**jsDelivr 那条只当镜像，别当发布验证依据**：它 `s-maxage=43200`，不同边缘节点各存各的，实测同一时刻能同时看到 1.0.0 / 1.0.2 / 最新版三种；要清就用 `https://purge.jsdelivr.net/gh/hanhan9999999999999999999/remote-connect-dsh@main/index.json`，但清完也别指望所有节点立刻一致。验发布一律看 raw 的字节数和 `commit`。
 
 ### 社区市场 awesome-dsh-plugin
 

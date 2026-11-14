@@ -28,11 +28,18 @@ DSH → 插件市场 → 索引源，填：
 https://raw.githubusercontent.com/hanhan9999999999999999999/remote-connect-dsh/main/index.json
 ```
 
-国内网络可换成 jsDelivr 镜像（内容相同）：
+这条是**主地址**：推完一般几十秒就能看到新版本。
+
+国内网络打不开 raw 时，可以换 jsDelivr 镜像：
 
 ```
 https://cdn.jsdelivr.net/gh/hanhan9999999999999999999/remote-connect-dsh@main/index.json
 ```
+
+> ⚠ **jsDelivr 是镜像，会滞后。** 我们对它实测过：`s-maxage=43200`（12 小时）加上不同边缘节点各存各的，
+> 同一时刻不同人看到的可能是 1.0.0 / 1.0.2 / 最新版三种。刚发完版就换索引源、又恰好命中旧节点，
+> 就会以为「怎么装到的还是旧版」。要「现在就是最新」，用上面的 raw 地址；要「永远是某一版」，
+> 用下面的 git 直装并钉标签或 40 位 SHA。
 
 索引里只有这一个插件，版本 `1.0.4`，来源是本仓库的 `plugins/dsh-remote-connect` 子目录。
 
