@@ -93,6 +93,7 @@
 - 目标不存在 → 直接写；
 - 目录/文件权限沿用，Windows 上忽略 mode；
 - 应用完成写 `journal.json`，`rollback` 可按反向顺序还原（仅本次同步涉及的文件）。
+- 半途失败的批次没有 `journal.json`，但 `journal.jsonl` 是逐行落盘的，`rollback` 会退回用它还原，并在结果里标 `partial: true`，同时补写一份 `journal.json`（避免下次又被当成半成品）。
 
 ## 5. 传输契约
 
@@ -149,7 +150,7 @@
 | 端口被占 | 启动前绑定探测（`server.mjs` 的 `start()`）；`EADDRINUSE` 报 `PORT_IN_USE` 并带上失败原因，换端口改 `server.port` |
 | 对端离线 | 会话令牌 12 小时过期，之后要重新握手；设置页每 6 秒拉一次状态，连不上就显示不可达（不做后台自动重连） |
 | 传输中断 | 接收端在 `<data>/syncs/<syncId>/` 留 `staging/` 与逐条 `journal.jsonl`；**没有断点续传**，重连后重新发起一次同步 |
-| 应用中断 | 只有正常收尾才写 `journal.json`；缺它的批次不会出现在 `local/syncs` 里，也就无法回滚——重发一次即可 |
+| 应用中断 | 只有正常收尾才写 `journal.json`；只写到一半的批次在 `local/syncs` 里标成 incomplete，回滚时退回 `journal.jsonl`（结果带 `partial: true`），临时文件会在失败收尾时清掉 |
 | 磁盘不足 | `/diagnostics` 的 `disk` 项报可用空间（< 2 GB 标 warn），只提示、不阻断同步 |
 
 ## 7. 兼容性

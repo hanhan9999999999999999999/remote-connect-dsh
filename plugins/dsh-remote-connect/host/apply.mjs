@@ -16,9 +16,6 @@ import { AppError, ensureDir, rid, safeJoin, writeJson } from './util.mjs'
 
 const JOURNAL_VERSION = 1
 
-function hashOf(text) {
-  return createHash('sha256').update(text).digest('hex').slice(0, 24)
-}
 
 export class Applier {
   constructor({ logger, dataHome, sync = {}, onEvent } = {}) {
@@ -105,6 +102,8 @@ export class Applier {
     const maxBytes = (this.sync.maxTotalMb ?? 8192) * 1024 * 1024
     let pendingFlush = []
     let lastEvent = 0
+    // 半途失败时可能留下 *.dshlink 临时文件：记下来，退出前清掉。
+    const tmpFiles = new Set()
 
     const flushJournal = async (force = false) => {
       if (!pendingFlush.length && !force) return
@@ -161,6 +160,7 @@ export class Applier {
         state.created += 1
       }
       const tmp = `${abs}.${process.pid}.${rid(3)}.dshlink`
+      tmpFiles.add(tmp)
       const stream = fs.createWriteStream(tmp)
       return {
         async write(chunk) {
@@ -192,6 +192,7 @@ export class Applier {
             await mergeProfileJson(tmp, abs)
           }
           await fsp.rename(tmp, abs)
+          tmpFiles.delete(tmp)
           state.files += 1
           pendingFlush.push({
             rel: meta.rel,
@@ -246,6 +247,8 @@ export class Applier {
       state.error = err?.code ? `${err.code}: ${err.message}` : String(err?.message ?? err)
       state.finishedAt = Date.now()
       await flushJournal(true).catch(() => {})
+      for (const tmp of tmpFiles) await fsp.rm(tmp, { force: true }).catch(() => {})
+      tmpFiles.clear()
       this.logger?.error('apply', `应用失败 ${syncId}`, { error: state.error })
       throw err
     }
@@ -294,10 +297,16 @@ export class Applier {
     const dir = this.#dir(syncId)
     const journalPath = path.join(dir, 'journal.json')
     let journal
+    let partial = false
     try {
       journal = JSON.parse(await fsp.readFile(journalPath, 'utf8'))
     } catch {
-      throw new AppError('NO_JOURNAL', '找不到该同步的记录，无法回滚')
+      // journal.json 只在正常收尾时写；没有它多半说明这次同步半途失败了（phase='failed'）。
+      // 而这正是用户最想撤销的时候——journal.jsonl 是逐行落盘的，正好能拿来还原已经落地的文件。
+      const rows = await readJournal(dir)
+      if (!rows.length) throw new AppError('NO_JOURNAL', '找不到该同步的记录，无法回滚')
+      journal = { id: syncId, entries: rows, partial: true }
+      partial = true
     }
     if (journal.rolledBackAt) throw new AppError('ALREADY_ROLLED_BACK', '这次同步已经回滚过了')
     const root = dshHome()
@@ -325,10 +334,10 @@ export class Applier {
       }
     }
     journal.rolledBackAt = Date.now()
-    journal.rollback = { restored, removed }
+    journal.rollback = { restored, removed, partial }
     await writeJson(journalPath, journal)
-    this.onEvent?.({ type: 'rollback', syncId, restored, removed })
-    return { syncId, restored, removed }
+    this.onEvent?.({ type: 'rollback', syncId, restored, removed, partial })
+    return { syncId, restored, removed, partial }
   }
 }
 
