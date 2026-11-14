@@ -62,12 +62,16 @@
   端口必须是 1–65535 的整数、`name`/`platform`/`version` 截断，缺字段的整条丢掉——
   否则一个乱发的包就能在列表里塞进端口为 `NaN` 的「对端」；
 - 所有路径在服务端二次校验（拒绝 `..`、绝对路径、盘符、保留名）；
-- 单文件上限 512 MB、单次同步上限 8 GB（可配置），超出在清单阶段就拒绝；
+- 单文件上限 512 MB、单次同步上限 8 GB（可配置），超出在清单阶段就拒绝（清单已经带总大小，不会先把文件逐个哈希一遍再说超限）；
 - 默认**不传输**（`host/inventory.mjs` 里的 `SECRET_FILE` / `ALWAYS_EXCLUDE_*`）：
   `.credentials.yaml`、`.dshw-api.json`、`model_config.json`、`.env*`、`*.pem|key|p12|pfx`、
   `id_rsa|ed25519|ecdsa*`、`.netrc`、`cookies*`；`node_modules/`、`.git/`、`.venv/`、`dist/`、
   `build/`、`coverage/`、`__pycache__/` 等目录；`*.log|tmp|part|swp|map|lock` 与 `.DS_Store`/`Thumbs.db`。
 - **本插件自己的数据目录永远排除**（`config.json` 存连接密码、`peers.json` 存会话密钥、`backups/` 存别人的旧文件）。
+- **哈希缓存**存在 `<data>/hash-cache.json`（最多 20000 条，载入时也按上限裁剪），键是 `路径|大小|mtime`：
+  大小和修改时间都没变就不重算 sha256。这是**启发式**——如果外部工具改了内容又把 mtime 改回去，
+  缓存会给出旧值（两端校验会因此对不上），删掉这个 json 或重装插件即可强制重算。
+  读文件失败（扫描之后被删、被独占锁）报 `READ_FAILED`，不会把裸 `ENOENT` 冒到 HTTP 层。
 - 开启「包含凭据」需在同步页显式勾选，且会在同步报告里单独标注。
 
 ## 4. 数据模型

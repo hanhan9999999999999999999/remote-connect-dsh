@@ -532,6 +532,7 @@ export class LinkServer {
       cats,
       includeSecrets: Boolean(payload?.includeSecrets && cfg.sync.includeCredentials),
       maxFileMb: cfg.sync.maxFileMb,
+      maxTotalMb: cfg.sync.maxTotalMb,
       cache: this.packCache,
     })
     const packId = rid(12)

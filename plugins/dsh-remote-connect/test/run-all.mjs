@@ -18,6 +18,7 @@ const suites = [
   'rollback.mjs',
   'pack-safety.mjs',
   'discovery.mjs',
+  'pack.mjs',
   'docs-guard.mjs',
   'install.mjs',
   'plugin-smoke.mjs',

@@ -402,6 +402,7 @@ export class LinkService {
         cats,
         includeSecrets: includeSecrets && cfg.sync.includeCredentials,
         maxFileMb: cfg.sync.maxFileMb,
+        maxTotalMb: cfg.sync.maxTotalMb,
         cache: this.packCache,
         onProgress: (p) => onProgress({ phase: 'hashing', done: p.done, total: p.total, totalBytes: p.bytes }),
       })

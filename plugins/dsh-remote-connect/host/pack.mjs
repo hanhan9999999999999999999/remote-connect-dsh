@@ -15,6 +15,8 @@ import { scanAll, manifestId } from './inventory.mjs'
 import { AppError, readJson, writeJson } from './util.mjs'
 
 const CACHE_LIMIT = 20000
+export { CACHE_LIMIT }
+
 
 export class PackCache {
   constructor(file) {
@@ -27,6 +29,15 @@ export class PackCache {
     const raw = await readJson(this.file, null)
     if (raw && typeof raw === 'object') {
       for (const [k, v] of Object.entries(raw)) this.map.set(k, v)
+      // 缓存文件可能比上限大（比如上次是别的版本写的）：载入时就裁掉最老的
+      if (this.map.size > CACHE_LIMIT) {
+        let drop = this.map.size - CACHE_LIMIT
+        for (const k of this.map.keys()) {
+          this.map.delete(k)
+          drop -= 1
+          if (drop <= 0) break
+        }
+      }
     }
     return this
   }
@@ -73,22 +84,34 @@ export class PackCache {
 
 async function hashFile(file) {
   const hash = createHash('sha256')
-  const stream = fs.createReadStream(file, { highWaterMark: 1024 * 1024 })
-  for await (const chunk of stream) hash.update(chunk)
+  try {
+    const stream = fs.createReadStream(file, { highWaterMark: 1024 * 1024 })
+    for await (const chunk of stream) hash.update(chunk)
+  } catch (err) {
+    // 扫描之后、读之前被人删了/锁了：给出可读的错误码，而不是裸 ENOENT 冒到 HTTP 层
+    throw new AppError('READ_FAILED', `读不到 ${file}：${err?.code ?? err?.message ?? '未知错误'}`, { cause: err?.code })
+  }
   return hash.digest('hex')
 }
 
 /**
  * @returns {Promise<{manifest: object, entries: Array, totalBytes: number}>}
  */
-export async function preparePack({ cats, includeSecrets = false, maxFileMb = 512, cache, onProgress } = {}) {
+export async function preparePack({ cats, includeSecrets = false, maxFileMb = 512, maxTotalMb = 8192, cache, onProgress } = {}) {
   const inv = await scanAll({ cats, includeSecrets, maxFileMb })
   if (!inv.entries.length) throw new AppError('EMPTY', '选中的分类里没有可同步的文件')
+  const maxTotal = maxTotalMb * 1024 * 1024
+  // 清单已经有总大小了：先判总量，别把 8 GB 文件逐个哈希完了才说超限
+  if (inv.totalBytes > maxTotal) {
+    throw new AppError('TOO_LARGE', `选中内容共 ${inv.totalBytes} 字节，超过上限 ${maxTotal} 字节，请拆分同步`, {
+      totalBytes: inv.totalBytes,
+      maxTotalBytes: maxTotal,
+    })
+  }
   const entries = []
   let done = 0
   let bytes = 0
   const total = inv.entries.length
-  const maxTotal = 8192 * 1024 * 1024
   for (const item of inv.entries) {
     const key = cache?.key(item.rel, item.size, item.mtime)
     let hash = cache?.get(key)
