@@ -375,13 +375,34 @@ export class LinkService {
 
   startSync({ peerId, direction = 'push', cats, includeSecrets = false }) {
     const task = this.tasks.add(newTask({ direction, peerId }))
-    this.#runSync(task, { cats, includeSecrets }).catch((err) => {
+    task.cancelRequested = false
+    this.#runSync(task, { cats, includeSecrets })
+      .then(() => this.#settle(task, null))
+      .catch((err) => this.#settle(task, err))
+    return taskView(task)
+  }
+
+  /**
+   * 任务只有一个收尾点：无论成功、失败还是用户取消，都从这里落到终态。
+   * 取消优先——用户点了取消，就不能再显示成「失败」或「完成」。
+   */
+  #settle(task, err) {
+    if (task.finishedAt) return
+    task.finishedAt = Date.now()
+    if (task.cancelRequested) {
+      task.phase = 'cancelled'
+      task.error = undefined
+      this.logger.info('sync', `同步已取消：${task.direction} ${task.peerId}`)
+      return
+    }
+    if (err) {
       task.phase = 'failed'
       task.error = `${err.code ?? 'ERROR'}: ${err.message}`
-      task.finishedAt = Date.now()
       this.logger.error('sync', `同步失败：${task.error}`)
-    })
-    return taskView(task)
+      return
+    }
+    task.phase = 'done'
+    this.logger.info('sync', `同步完成：${task.direction} ${humanBytes(task.result?.bytes ?? task.bytes)}`)
   }
 
   async #runSync(task, { cats, includeSecrets }) {
@@ -429,9 +450,6 @@ export class LinkService {
       })
       task.result = { direction: 'pull', ...result }
     }
-    task.phase = 'done'
-    task.finishedAt = Date.now()
-    this.logger.info('sync', `同步完成：${task.direction} ${humanBytes(task.result?.bytes ?? task.bytes)}`)
   }
 
   task(id) {
@@ -441,11 +459,19 @@ export class LinkService {
   async cancelTask(id) {
     const t = this.tasks.get(id)
     if (!t) return null
-    if (t.phase === 'done' || t.phase === 'failed') return taskView(t)
+    if (t.finishedAt || t.phase === 'done' || t.phase === 'failed' || t.phase === 'cancelled') {
+      return taskView(t)
+    }
+    if (t.cancelRequested) return taskView(t)
+    t.cancelRequested = true
+    t.phase = 'cancelling'
     const peer = this.clients.get(t.peerId)
-    peer?.abort?.()
-    t.phase = 'cancelled'
-    t.finishedAt = Date.now()
+    try {
+      peer?.abort?.()
+    } catch {
+      /* 对端已经断开也算取消成功 */
+    }
+    this.logger.info('sync', `请求取消同步 ${t.id}`)
     return taskView(t)
   }
 

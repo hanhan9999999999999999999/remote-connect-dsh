@@ -2,6 +2,18 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.19 — 2026-11-15
+
+### 修复
+
+- **取消同步会被改写成「失败」**：过去 `cancelTask` 只是把任务标成 `cancelled` 再掐断连接，可还在跑的 `#runSync` 随后 reject，catch 里又把它写成 `failed`——界面先显示「已取消」，两秒后变成「失败」，而且失败原因是一条 `NETWORK: 连接被中断`，看着像出了故障。现在任务只有一个收尾点 `#settle()`：取消优先，中断不算失败。
+- 取消期间任务显示 `cancelling`（不是直接跳到 `cancelled`），并且重复点取消、对已经完成/失败的任务点取消都不会改写状态；掐连接失败（对端早就断了）也算取消成功。
+
+### 新增
+
+- `test/sync-cancel.mjs`：4 项断言——取消后终态是 `cancelled` 且没有 error、正常完成是 `done` 且事后取消不改写、真失败才写 `failed` 并带 `错误码: 消息`、没连上就失败的任务也会落终态。已进 `run-all`（现 22 个套件）。
+- `docs/ARCHITECTURE.md` §6 增加了任务状态流转说明（`queued → starting → hashing/preparing → done`，或 `failed`，或 `cancelling → cancelled`）。
+
 ## 1.0.18 — 2026-11-15
 
 ### 修复

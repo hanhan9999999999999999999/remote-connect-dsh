@@ -154,6 +154,12 @@
 
 ## 6. 失败与恢复
 
+**同步任务的状态**只有一条出口（`service.mjs` 的 `#settle`），不会出现「既取消了又失败」这种两副面孔：
+
+`queued` → `starting` → `hashing`（推送）/ `preparing`（拉取）→ `done`，
+或者 `failed`（带 `错误码: 消息`），或者用户点取消时先 `cancelling` 再落到 `cancelled`。
+取消优先：点了取消之后，即便底层连接是被掐断的，也不会被记成 `failed`。
+
 | 场景 | 处理 |
 | --- | --- |
 | 端口被占 | 启动前绑定探测（`server.mjs` 的 `start()`）；`EADDRINUSE` 报 `PORT_IN_USE` 并带上失败原因，换端口改 `server.port` |
