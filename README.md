@@ -1,118 +1,174 @@
-这儿是源码还在持续更新，源码有最新功能适合开发交流不建议做生产环境，如果大家需要稳定版本可以到release里滑到最底部下载，已经打包好环境开箱即用
+# dsh-remote-connect
 
-这是可以让现有大语言模型拥有无限上下文的能力的系统（小眼子），主要为长航时大型任务而设计。
-现阶段已实现长上下文不降智、不遗忘、可随意跨话题继续工作，并且在无需微调大语言模型的条件下具备一定程度的学习能力和长久记忆能力。
-<img width="1920" height="1032" alt="ScreenShot_2026-10-13_145616_517" src="https://github.com/user-attachments/assets/81c288fe-7a1f-4999-a9d8-6de5190cde15" />
+> DSH 插件：**用手机远程操作电脑上的 DSH**，以及**两台电脑之间互相同步**插件 / 技能 / 规则 / 配置 / 会话。
 
+装在 DSH 里之后，设置页会多出一个 **「远程互联」** 分区，两个能力都在里面。
 
-有趣的是这个系统使得即使是对驾驭工具能力比较弱的deepseekV3，都能有很好的处理复杂任务能力（发现这个原因是当时调错API模型导致我几天都以为在用deepseek V4 flash开发项目🤫，并且发现deepseekV3正常智力在13k上下文以内，如果在这个项目里使用deepseekV3只要把工作记忆设定在13k就能让模型一直保持思路清晰）
+| 能力 | 做什么 | 入口 |
+| --- | --- | --- |
+| 📱 **手机通道** | 手机浏览器直接打开电脑上的 DSH：二维码配对、局域网直连，或走你自己的公网域名 | 设置 → 远程互联 → 手机通道 |
+| 💻 **电脑互联** | 两台电脑互扫配对，同步插件 / 技能 / 规则 / 配置 / 会话，随时可回滚 | 设置 → 远程互联 → 互联 |
 
-设计初衷是之前用Claude code在解决我一个长线复杂项目时，总是因为上下文变长后它变得智力衰退、忘记内容、注意力分散症状导致无法协助我继续任务，结合之前本人有做过长记忆直播ai的基础，然后顺势做了这个系统
-（直播ai跟榜一大哥对话图例）
-<img width="1500" height="2000" alt="addc6f494725da289ac2921a77d4a891" src="https://github.com/user-attachments/assets/031769fe-b278-4cd4-9a87-4b8d6ae07177" />
+- 插件名：`dsh-remote-connect`
+- 版本：1.0.0
+- 许可证：MIT
+- 需要的 DSH：带 `webServer` 服务、客户端支持 `settings.section` 插槽的版本
 
-系统有了长期记忆和连续思维能力后同时衍生出来学习能力（晶体智力），致使可以灌输特定记忆使它拥有特定能力、性格、认知改变，这种继承记忆能力再配合第一人称的叙事系统，配合纯净的API它会更相信这就是它的记忆，理论上它可以变成任何样子的人/物
+---
 
-主要实现思路：
-往大模型里塞聊天记录并只压缩x
-往大模型里塞它希望关注的内容✓
-这套系统之所以能做到永远不爆上下文，关键在于它的服务对象不在上下文，而是服务大模型当下关注的内容，具体的实现逻辑我会在公布源码时一起说明
+## 安装
 
-目前它由这些大类组合成的架构：
-工作记忆层，注意力窗口，连续思维链，记忆网络，心智锚点，反思回路，任务执行层，金字塔hash文件系统，流程图和思维导图做引导模块
-<img width="1169" height="1245" alt="image" src="https://github.com/user-attachments/assets/ca7003c1-6623-46e5-a71d-62f0ea60c1a5" />
+### 方式一：从市场索引装（推荐）
 
-做了这么一堆玩意儿最后合体出来是这个样子
-（桌面端）
+DSH → 插件市场 → 索引源，填：
 
-<img width="2543" height="1523" alt="256b5d0346d24d50a7bdb1ff30f4be45" src="https://github.com/user-attachments/assets/df03a8a9-75ca-49b5-81da-5ccf0798dc37" />
-<img width="2543" height="1523" alt="471324b651433ea89a0dbb094c4c2f1a" src="https://github.com/user-attachments/assets/95f9196d-49a6-4634-952a-29322d7dfc14" />
-
-
-<img width="2543" height="1523" alt="399e11a96c40c236b36dcfd0ccc74808" src="https://github.com/user-attachments/assets/495f591a-01ab-4209-8283-a3af40fa198e" />
-（移动端）
-<img width="1500" height="2667" alt="6e6d131ce744c75473edecfead5a363e" src="https://github.com/user-attachments/assets/3fc4d12b-707f-494c-b80b-c2b0ce64ac29" />
-
-这应该是个适合做超大型任务的神器，大家放心拿去玩，千万别接上比deepseekv3能力更弱的模型。
-项目已涵盖全部web端，通配移动端ios、安卓apk。在模型设置里适配好API就可以用啦。
-出于隐私本人清空了系统的记忆，大家拿到后可以教它一些习惯，它会慢慢变顺手的。本人懒得写文档，之后补上~，源码会在后续的正式版附上，会补上更多的实用能力，大家可以关注一下后续进展喔。
-更新细节会在阿B动态上发，大家感兴趣的话可以关注这儿 【Aria-AQ的个人空间-哔哩哔哩】 https://b23.tv/2zbbt3U
-目前公开的这个版本还不是最理想的框架，但是它却出奇的高效稳定便宜，就先分分享给大家玩玩，目前写代码做文档把它当长期员工/秘书足够了，希望这一步开始可以更加接近钢铁侠里面的贾维斯，计划之后设计成一个对话入口就够了，不需要一堆乱糟糟的话题卡片，主打一切交给助手，反正它会整理好的。
-
-## 桌面端现在能做什么（2026-11）
-
-- **每天自己备份**：启动后自动检查，超过 24 小时没备份就补一份（最近留 8 份，可在 设置 → 系统 下载）；也能一键「恢复」回某一份，恢复前自动留底。
-
-- **长任务会话**：分栏工作区（文件 / 导图 / 终端）、任务导出成 Markdown、侧栏全文搜索能直接跳到命中那句。
-- **记忆**：一句话检索（bge-small-zh，本地 24ms 级）、记忆图谱、`反思一次` 整理弱关联与实体、
-  知识页按版本翻、单条记忆可以忘掉。
-- **文件晶体**：文件预览里一键切片，右键/长按也能建；晶片可搜（带分数，不把 embedding 发给浏览器）；
-  「已索引的文件」里能看每份文件的片数与过期片，并直接重建。
-- **资产库**：文件原地不动、只登记引用；笔记/速记/链接、目录能一路点进去预览，笔记渲染 Markdown，
-  图片走 480px 缩略图，链接卡片有外链标记，一条资产可以「引用」进输入框让模型按 id 去读。
-- **时间机器**：AI 每次 write_file/edit_file 都留改前全文，能逐版本恢复；
-  代码存档是本机 zip（改过就自动存、最多 12 份、回滚前先备份、可疑压缩包直接拒绝）。
-- **出错时说实话**：接口报错中文、500 带一句人话和详情、系统页能看最近的错误并清空；
-  没配模型密钥时输入框上方常驻提示条 + 错误行上的「去填 Key」，点一下直达模型设置。
-- **收拾干净**：回收站能还原，删任务不删工作区但能一键清理孤儿目录；日志按 UTF-8 写、访问日志 5MB 轮转。
-- **对话里也能找**：Ctrl/⌘+F 只筛当前对话（命中/总数，Esc 复原）；↑ 翻发过的话；长代码块右上角一键复制。
-- **键盘能走完一圈**：Tab 有焦点环、第一个 Tab 直达输入框、? 看快捷键小抄；确认框是真正的 dialog，Tab 不会跑出去。
-- **出问题有东西可交**：系统页可导出诊断包（版本、环境、最近错误、日志尾部，密钥打码、不含聊天内容）。
-
-## 手机通道与语音（2026-11）
-
-手机端不是另一套系统，而是把当前桌面会话接到手机浏览器：同一 WiFi 打开配对地址即可，
-支持 SSE 流式回复、历史会话、待办、提醒、剪贴板、语音输入与语音播报。代码在
-[`phone-bridge/`](phone-bridge/README.md)，那份 README 才是运维与接口的权威说明。
-
-```powershell
-# 桥接（端口 8899，守护脚本会自动拉起）
-powershell -NoProfile -ExecutionPolicy Bypass -File phone-bridge\ensure-running.ps1
-
-# 可选：本机 GPU 语音（CosyVoice3，127.0.0.1:8898）
-.\启动肥鱼语音.bat
+```
+https://raw.githubusercontent.com/hanhan9999999999999999999/remote-connect-dsh/main/index.json
 ```
 
-语音播报有三种引擎，手机设置页顶部切换：**Edge 在线**（默认，9 个音色）、
-**肥鱼本地**（`D:\feiyu` 的 CosyVoice3，音色跟着 `references/` 目录走，完全离线）、
-**系统音色**（Windows OneCore，兜底）。肥鱼没启动时会自动回落 Edge，不会没声音。
+国内网络可换成 jsDelivr 镜像（内容相同）：
 
-自测（不需要手机）：
-
-```powershell
-cd phone-bridge
-npm test            # 196 项单测
-npm run check       # 语法检查
-npm run doctor      # 只读体检（含肥鱼服务）
-npm run test:e2e    # 28 步浏览器回归（需要手机/真机侧配合）
+```
+https://cdn.jsdelivr.net/gh/hanhan9999999999999999999/remote-connect-dsh@main/index.json
 ```
 
-桌面端界面自测（无头 Edge，不装依赖）：
+索引里只有这一个插件，版本 `1.0.0`，来源是本仓库的 `plugins/dsh-remote-connect` 子目录。
+
+### 方式二：用 git 直装
+
+插件在 monorepo 子目录里，`npm` 装不了（它不支持 git 子目录），用 pnpm：
 
 ```powershell
-node scripts\ui-smoke.mjs                      # 70 项：首屏/快速跳转/空态/设置搜索/文件面板/状态面板/晶体清单/消息流/搜索卡片/列表失败重试/移动端抽屉/JS 异常
-node scripts\ui-smoke.mjs http://127.0.0.1:9891/   # 指定实例
-node scripts\ui-smoke.mjs --shot tmp\ui-smoke      # 顺手落截图
-node scripts\phone-smoke.mjs                   # 手机端 7 项：挂载/消息流/工具折叠/长按菜单/图片预览/输入区/JS 异常
-node scripts\api-smoke.mjs                    # 后端 121 项：越权删除/改名、参数写错、记忆读写删（tags 数组）、晶体接口、反思回路、回收站
-python scripts\check-desktop-js.py            # 桌面端 5 段内联脚本语法检查（npm run check 查的是手机端，管不到这里）
-python tools\selftest_memory_clear.py          # 清空记忆必须连带清关系/实体（临时库，不碰 data/chat.db）
-scripts\check-all.bat                         # 一把跑完上面静态检查；加 --full 连三套浏览器冒烟一起跑
+pnpm add "git+https://github.com/hanhan9999999999999999999/remote-connect-dsh.git#4d5e98b009bca5342f62e7262089ed4fc83b8e19&path:/plugins/dsh-remote-connect"
 ```
 
-### 已知限制（免得你以为坏了）
+### 方式三：手动放进 profile
 
-- **代码存档只保源码**：设置 → 时间机器里的 zip 快照收的是 `public / tools / memory / scripts / 根目录几个 .py`，
-  不含 `data/`（聊天记录另有「数据备份」）；回滚后要重启服务才生效，回滚前会自动留一份当前代码。
-- **记忆/晶体/图谱这些维护入口只在桌面端**：手机端（`phone-bridge/public/app.html`）是
-  另一套前端，主打聊天、语音和文件预览。
-- **没配模型 key 也能用一部分**：建晶体、反思、召回都走本地模型（`models/bge_small_zh`），
-  摘要用本地抽取；真正聊天需要在「模型配置」里填可用的 API。
-- **默认只绑本机**：要局域网访问得用 `--host 0.0.0.0` 启动；这时建议同时设 `DSH_TOKEN=一串随机字符`（打开 `http://地址:端口/?token=…` 一次即可，之后浏览器记住），否则同网段谁能连上谁就能读写文件、跑命令。
-- **回收站按快照还原**：恢复时保留原消息 id（这样语义检索不丢）和原更新时间，
-  所以它不一定排在列表最前面。
+```powershell
+# 把仓库里的插件目录拷进当前 profile 的 node_modules
+Copy-Item -Recurse .\plugins\dsh-remote-connect "$env:DSH_HOME\profiles\desktop\node_modules\dsh-remote-connect"
+```
 
-结个尾巴
-回顾实现过程还真的是个挺复杂的工程（即使大部分开发已经由它自己完成），我也是想了很久才想清楚怎么介绍这个项目，每一个环节都是为它量身定做，里面的子功能也是不小的项目，都需要为了服务稳定长时间运行，后续的大部分开发还会由这个项目它自己完成，看着它能自己默默解决问题感觉还是蛮值得的。
+包内自带 `scripts/install.mjs`，也可以用：
 
-当我准备公开时才发现，注意力这块能力与Kimi最近新出的注意力残差架构设计哲学殊途同归，人类的大脑依然是我们的教科书啊
+```powershell
+node .\plugins\dsh-remote-connect\scripts\install.mjs
+```
+
+装完重启 DSH，进 设置 → 远程互联。
+
+---
+
+## 手机通道怎么用
+
+1. 电脑上装好本插件，DSH 开着；
+2. 设置 → 远程互联 → **手机通道** → 点「启动」，拿到二维码 / 配对码；
+3. 手机连同一个 Wi-Fi，浏览器扫码打开；不在同一网段就走公网域名（见下）。
+
+**手机通道需要有 `phone-bridge/` 目录**——它是每台机器自己的运行态（路径、端口、域名、私钥都绑在这上面），插件不打包它。目录里至少要有 `ensure-running.ps1` 或 `server.mjs`。
+
+路径优先级：
+
+```
+config.bridgeDir  >  config.dir  >  环境变量 DSH_PHONE_BRIDGE_DIR  >  默认值
+```
+
+配置写在 DSH 插件配置里：
+
+```yaml
+dsh-remote-connect:
+  bridgeDir: 'D:/document/Remote Connect DSH/phone-bridge'
+```
+
+没装 `phone-bridge` 时不会报错，面板显示「本机还没装手机通道」并给出当前找的路径。
+
+细节（接口、状态字段、停用方式）：[plugins/dsh-remote-connect/docs/PHONE.md](plugins/dsh-remote-connect/docs/PHONE.md)
+
+---
+
+## 电脑互联怎么用
+
+1. 两台电脑都装本插件，各自在 设置 → 远程互联 里设设备名和密码；
+2. A 点「发现」或直接填 B 的地址 → 配对；
+3. 配对后在 A 上勾选要同步的类别（插件 / 技能 / 规则 / 配置 / 会话），点「推送」或「拉取」；
+4. 每次同步都有记录，`回滚` 可以退回上一份。
+
+同步走的接口一览（前缀 `/dsh-remote-connect-api`）：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/status` | 本机互联状态、设备名、端口 |
+| GET | `/diagnostics` | 诊断信息 |
+| GET | `/logs` | 最近 300 行日志 |
+| POST | `/config` | 改配置 |
+| GET | `/deps` · POST `/deps/install` | 依赖检查 / 安装 |
+| POST | `/device/name` | 改设备名 |
+| POST | `/password/set` · `/password/rotate` | 设密码 / 换密码 |
+| POST | `/server/start` · `/server/stop` | 起停互联服务 |
+| POST | `/discover` · `/connect` | 发现对端 / 配对连接 |
+| POST | `/peer/disconnect` · `/peer/forget` · `/peer/rename` · `/peer/probe` | 对端管理 |
+| POST | `/inventory` · `/sync` | 列出可同步内容 / 开始同步 |
+| POST | `/task/status` · `/task/cancel` | 同步任务进度 / 取消 |
+| POST | `/local/syncs` · `/local/rollback` | 本机同步记录 / 回滚 |
+| POST | `/remote/syncs` · `/remote/rollback` | 对端同步记录 / 回滚 |
+| GET | `/phone/status` · `/phone/port` · `/phone/paircode` | 手机通道代理（同进程直连） |
+| POST | `/phone/start` · `/phone/stop` | 手机通道启停 |
+
+手机通道自身还注册了一组 `/dsh-phone-api/*`（`status` / `start` / `stop` / `port` / `paircode`）。
+
+**为什么面板走 `/dsh-remote-connect-api/phone/*` 而不是 `127.0.0.1`**：回环请求没有 renderer token，会被浏览器访问策略挡成 403，所以面板和桥接在同一进程里直连函数。
+
+---
+
+## 目录结构
+
+```
+plugins/dsh-remote-connect/
+├── index.js              Host 半：注册 /dsh-remote-connect-api/*，挂载手机通道
+├── client.js             客户端半：设置页「远程互联」分区（slots/设置/locale）
+├── host/
+│   ├── service.mjs       互联服务：配对、同步、回滚
+│   ├── peer.mjs/peers.mjs 对端握手、探测、对端表
+│   ├── discovery.mjs     局域网发现
+│   ├── inventory.mjs     可同步内容清点
+│   ├── pack.mjs/tar.mjs 打包与解包
+│   ├── crypto.mjs        配对码 / 密码派生
+│   ├── frames.mjs        传输分帧
+│   ├── phone.mjs         手机通道：启停、端口、配对码、状态
+│   ├── server.mjs        互联 HTTP 服务
+│   ├── apply.mjs/config.mjs/deps.mjs/util.mjs  装配、配置、依赖、常量
+├── locale/{zh,en}.json   文案（分区名「远程互联」/ Remote Connect）
+├── docs/{PHONE,ARCHITECTURE}.md
+├── cordis.patch.yml      插件清单补丁
+└── test/                 客户端冒烟、清单守卫、依赖、路由、端到端
+```
+
+---
+
+## 开发与测试
+
+```powershell
+cd plugins/dsh-remote-connect
+node test/run-all.mjs
+```
+
+包含：客户端冒烟（插槽/文案/顺序）、清单守卫（`files` 与实际文件一致）、依赖声明、路由（35 条断言 + 手机通道 5 条）、端到端（health / pull / push / rollback）。全部用临时目录，不碰你真机的数据。
+
+改完插件后的发版流程（改版本 → 提代码 → 拿 SHA → 更新 `index.json` → 校验 → 实装验证 → 社区市场提 PR）写在 [RELEASING.md](RELEASING.md)。
+
+---
+
+## 安全边界
+
+- 连接是**配对码 + 密码**双要素，配对后对端才会出现在列表里；
+- 同步内容由你自己勾选，默认不包含任何密钥文件；
+- 局域网 HTTP 是明文，信任模型写在 [plugins/dsh-remote-connect/SECURITY.md](plugins/dsh-remote-connect/SECURITY.md)；
+- 走公网域名时用的是你自己的隧道和证书，别把私钥提交进仓库（本仓库 `.gitignore` 已排除 `runtime/`）。
+
+---
+
+## 相关
+
+- [RELEASING.md](RELEASING.md) — 发版与上架手册
+- [index.json](index.json) — DSH 插件市场索引（format 1）
+- [LICENSE](LICENSE) — MIT
