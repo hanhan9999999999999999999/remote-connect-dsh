@@ -1,0 +1,45 @@
+{
+  "format": 1,
+  "title": { "zh": "远程互联", "en": "Remote Connect" },
+  "description": {
+    "zh": "手机浏览器操作电脑上的 DSH，以及两台电脑之间同步插件、技能、规则、配置与会话。",
+    "en": "Drive DSH on your computer from a phone browser, and sync plugins, skills, rules, config and sessions between two computers."
+  },
+  "metadata": {
+    "categories": { "link": { "title": { "zh": "互联", "en": "Connectivity" } } },
+    "labels": { "remote": { "title": { "zh": "远程", "en": "Remote" } }, "phone": { "title": { "zh": "手机", "en": "Phone" } } },
+    "sortKeys": {}
+  },
+  "plugins": [
+    {
+      "name": "dsh-remote-connect",
+      "title": { "zh": "远程互联", "en": "Remote Connect" },
+      "description": {
+        "zh": "手机扫码即可在浏览器里操作电脑上的 DSH；两台电脑之间也能配对、发现，把插件/技能/规则/配置/会话一键搬过去。",
+        "en": "Scan a code to drive DSH on your computer from a phone browser; pair two computers and move plugins, skills, rules, config and sessions across in one click."
+      },
+      "author": "hanhan9999999999999999999",
+      "homepage": "https://github.com/hanhan9999999999999999999/remote-connect-dsh",
+      "repository": { "url": "https://github.com/hanhan9999999999999999999/remote-connect-dsh" },
+      "metadata": {
+        "category": "link",
+        "keywords": ["remote", "phone", "sync", "pairing", "mobile"],
+        "labels": ["remote", "phone"],
+        "sortKeys": {}
+      },
+      "versions": [
+        {
+          "version": "1.0.0",
+          "publishTimestamp": 1794692853,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/hanhan9999999999999999999/remote-connect-dsh.git",
+            "commit": "4d5e98b009bca5342f62e7262089ed4fc83b8e19",
+            "path": "plugins/dsh-remote-connect"
+          },
+          "engines": { "dsh": ">=0.1.0" }
+        }
+      ]
+    }
+  ]
+}
