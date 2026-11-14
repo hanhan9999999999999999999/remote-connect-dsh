@@ -13,7 +13,7 @@ window.__ModuleLoader__.load({
     const { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } = React
 
     const API = '/dsh-remote-connect-api'
-    const NS = 'deviceLink'
+    const NS = 'remoteConnect'
 
     /* ------------------------------------------------------------------ */
     /* i18n                                                               */

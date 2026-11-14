@@ -68,7 +68,7 @@ bundle.apply(ctx)
 const section = slots.find((s) => s.opts.name === 'settings.section')
 if (!section) throw new Error('settings.section was not registered')
 if (section.opts.id !== 'remote-connect') throw new Error('unexpected section id: ' + section.opts.id)
-if (!dict || dict.ns !== 'deviceLink') throw new Error('locale dictionaries were not registered')
+if (!dict || dict.ns !== 'remoteConnect') throw new Error('locale dictionaries were not registered')
 if (!dict.d.zh || !dict.d.en) throw new Error('zh/en dictionaries missing')
 
 const zhKeys = Object.keys(dict.d.zh)

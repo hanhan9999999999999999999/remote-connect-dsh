@@ -10,7 +10,7 @@
 | 本机互联服务（监听/密码/发现） | 本插件 host 半侧 | Node 内置模块实现，不依赖 DSH 的 Web 端口 |
 | 局域网发现 | 本插件 host 半侧 | UDP 广播应答（无第三方依赖） |
 | 两台 DSH 之间的数据同步 | 本插件 host 半侧 | 清单 → 计划 → 打包 → 应用 → 备份/回滚 |
-| 手机通道开关 | 复用 `dsh-phone-bridge` | 设置页里做一个「手机通道」标签，通过其已有的 `/dsh-phone-api/*` 操作 |
+| 手机通道开关 | 本插件 host 半侧（`host/phone.mjs`） | 同进程挂载 `/dsh-phone-api/*`，并给设置页提供 `/dsh-remote-connect-api/phone/*` 代理 |
 
 插件**不修改** DSH 本体，不改宿主 asar，不注入代码；只使用公开的插件契约
 （`ctx.slots`、`webServer.register`）。
