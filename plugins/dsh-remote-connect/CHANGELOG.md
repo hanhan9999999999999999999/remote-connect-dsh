@@ -2,6 +2,19 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.6 — 2026-11-14
+
+继续拆巨型文件：把「谁在听这个端口」从手机通道的启停编排里拿出来，为它单独配了测试。
+
+### 变更
+
+- 新增 `host/port-scan.mjs`：`parseNetstat` / `netstatListeners` / `invalidateNetstat` / `listenerPids` / `isBridgeCmd` / `pickFreePort`。`phone.mjs` 从 739 行降到 687 行，只留目录探测、启停编排、状态与 HTTP 接口。
+- `parseNetstat` 是纯函数（输入 netstat 文本、输出 `Map<端口, pid[]>`），所以解析规则第一次能被直接断言，而不必真起一个 `netstat.exe` 去猜。
+
+### 新增
+
+- `test/port-scan.mjs`：10 项断言——IPv4/IPv6 同端口多 pid 去重、UDP 与 `ESTABLISHED` 不算监听、脏行（端口 0 / pid 0）丢弃、空输入不炸、`server.mjs` 认领规则（含大写与反斜杠）、缓存有效期内的实例复用、`listenerPids` 对空闲端口返回空数组、`pickFreePort` 挑出的端口确实不在监听表里。已进 `test/run-all.mjs`。
+
 ## 1.0.5 — 2026-11-14
 
 纯内部整理：把任务表从 `service.mjs` 里搬出来，行为不变，但从此有测试盯着。

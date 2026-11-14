@@ -13,6 +13,7 @@ import { execFile, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { invalidateNetstat, isBridgeCmd, listenerPids, netstatListeners, pickFreePort } from './port-scan.mjs';
 
 export const inject = ['webServer'];
 
@@ -173,47 +174,6 @@ async function health(timeoutMs = 3000, port = bridgePort()) {
   }
 }
 
-/**
- * 一次 netstat 拿全部 LISTENING 端口（缓存 2 秒），**同一个端口可能有多个 pid**。
- * 这在 Windows 上是常态：别人绑 127.0.0.1:8899、桥接绑 0.0.0.0:8899 并不冲突，
- * 但本机请求会走更具体的那条绑定 —— 所以「端口有人听」不等于「桥接能用」。
- */
-let netstatCache = { at: 0, map: new Map() };
-function netstatListeners() {
-  return new Promise((resolve) => {
-    if (Date.now() - netstatCache.at < 2000 && netstatCache.map.size) return resolve(netstatCache.map);
-    execFile('netstat.exe', ['-ano'], { windowsHide: true, timeout: 10000 }, (err, stdout) => {
-      const map = new Map();
-      if (!err && stdout) {
-        for (const line of String(stdout).split(/\r?\n/)) {
-          const m = line.match(/:(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$/i);
-          if (!m) continue;
-          const port = Number(m[1]);
-          const pid = Number(m[2]);
-          if (!(port > 0) || !(pid > 0)) continue;
-          const arr = map.get(port);
-          if (arr) {
-            if (!arr.includes(pid)) arr.push(pid);
-          } else {
-            map.set(port, [pid]);
-          }
-        }
-      }
-      netstatCache = { at: Date.now(), map };
-      resolve(map);
-    });
-  });
-}
-
-/** 这个端口的全部 LISTENING pid。 */
-async function listenerPids(port) {
-  const map = await netstatListeners();
-  return (map.get(Number(port)) || []).slice();
-}
-
-function isOurBridge(cmdline) {
-  return /server\.mjs/i.test(String(cmdline || ''));
-}
 
 /**
  * 这个端口上「自己的桥接」的 pid —— killPid 只该杀这个，绝不能碰别人的程序。
@@ -224,7 +184,7 @@ async function listenerPid(port = bridgePort()) {
   if (!pids.length) return null;
   for (const pid of pids) {
     const info = await procInfo(pid);
-    if (info && isOurBridge(info.cmdline)) return pid;
+    if (info && isBridgeCmd(info.cmdline)) return pid;
   }
   if (await health(1200, port)) return pids[0];
   return null;
@@ -270,8 +230,8 @@ async function probePort(port) {
     const i = await procInfo(pid);
     infos.push({ pid, name: (i && i.name) || '', cmdline: (i && i.cmdline) || '' });
   }
-  const mine = infos.filter((x) => isOurBridge(x.cmdline));
-  const others = infos.filter((x) => !isOurBridge(x.cmdline));
+  const mine = infos.filter((x) => isBridgeCmd(x.cmdline));
+  const others = infos.filter((x) => !isBridgeCmd(x.cmdline));
 
   // 只有自己人（半死不活）：清掉就能继续用这个端口
   if (mine.length && !others.length) return { port, state: 'stale', pid: mine[0].pid, pids, mine, others: [] };
@@ -286,20 +246,9 @@ async function clearStale(port) {
   if (probe.state !== 'stale') return probe;
   for (const m of probe.mine || []) await killPid(m.pid);
   await sleep(500);
-  netstatCache.at = 0; // 缓存作废，重新看一遍真实情况
+  invalidateNetstat(); // 缓存作废，重新看一遍真实情况
   return probePort(port);
 }
-
-/** 从 from 往后找第一个没人监听的端口（跳过桥接自己的那些惯例端口段）。 */
-async function pickFreePort(from) {
-  const map = await netstatListeners();
-  const start = Math.max(1024, Math.min(65535, Number(from) || 8899));
-  for (let p = start; p <= Math.min(65535, start + 60); p++) {
-    if (!map.get(p)) return p;
-  }
-  return 0;
-}
-
 function killPid(pid) {
   return new Promise((resolve) => {
     if (!pid) return resolve(false);
@@ -474,7 +423,7 @@ async function startBridgeOnce(opts = {}) {
     if (oldPid) {
       await killPid(oldPid);
       await sleep(600);
-      netstatCache.at = 0;
+      invalidateNetstat();
     }
     writePortJson(port);
   }

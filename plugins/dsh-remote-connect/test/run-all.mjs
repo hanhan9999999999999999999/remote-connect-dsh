@@ -8,6 +8,7 @@ const suites = [
   'client-smoke.mjs',
   'a11y.mjs',
   'tasks.mjs',
+  'port-scan.mjs',
   'inventory-guard.mjs',
   'deps.mjs',
   'bridge-dir.mjs',
