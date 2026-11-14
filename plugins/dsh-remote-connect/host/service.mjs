@@ -229,6 +229,10 @@ export class LinkService {
     const p = Number(target.port) || 8788
     const cfg = await this.store.get()
     const existing = (await this.peerStore.list()).find((x) => x.host === target.host && x.port === p)
+    // list() 给的是对外视图，里面没有 password；要拿旧密码必须走 raw()，
+    // 否则「记住密码」会在每一次不重输密码的重连里被悄悄清空。
+    const stored = existing ? await this.peerStore.raw(existing.id) : null
+    const keepPassword = stored?.password || ''
     const record = await this.peerStore.upsert({
       id: existing?.id,
       name: target.name || existing?.name || target.host,
@@ -236,7 +240,7 @@ export class LinkService {
       port: p,
       scheme,
       insecure,
-      password: rememberPassword ? target.password ?? existing?.password ?? '' : existing?.password ?? '',
+      password: rememberPassword ? target.password ?? keepPassword : keepPassword,
       lastSeen: Date.now(),
     })
     const peer = await this.#peer(record.id)
@@ -256,7 +260,7 @@ export class LinkService {
       token: peer.record.token,
       sk: peer.record.sk,
       expiresAt: peer.record.expiresAt,
-      password: rememberPassword ? target.password ?? record.password : '',
+      password: rememberPassword ? target.password ?? keepPassword : '',
       lastOkAt: Date.now(),
       lastError: null,
     })
