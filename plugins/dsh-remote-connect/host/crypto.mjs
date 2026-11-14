@@ -16,10 +16,25 @@ import {
   timingSafeEqual,
 } from 'node:crypto'
 import { promisify } from 'node:util'
+import { AppError } from './util.mjs'
 
 const scryptAsync = promisify(scrypt)
 
 export const KDF_DEFAULTS = Object.freeze({ N: 16384, r: 8, p: 1, keylen: 32 })
+/**
+ * KDF 参数的上限。握手时对端会把它的 kdf 参数报过来，本机照着算——
+ * 但那是**对端说的**，不能当可信值用：scrypt 的内存≈128*N*r，
+ * 一句 `{"kdf":{"N":1073741824}}` 就能让本机去申请一个不存在的体积。
+ * 这里给一条硬线，和 config.mjs 里本机自设的上限保持一致。
+ */
+export const KDF_LIMITS = Object.freeze({
+  minN: KDF_DEFAULTS.N,
+  maxN: 1 << 20,
+  maxR: 32,
+  maxP: 16,
+  /** 128 * N * r 不得超过这个体积（≈ 512 MB）。 */
+  maxMemoryBytes: 512 * 1024 * 1024,
+})
 const PROOF_LABEL = 'dsh-link/hello/v1'
 const SESSION_LABEL = 'dsh-link/session/v1'
 
@@ -37,6 +52,54 @@ export function normalizePassword(raw) {
 
 export function randomNonce(bytes = 16) {
   return randomBytes(bytes)
+}
+
+/**
+ * 把对端报来的 kdf 参数收成一份能干活的、且有上限的参数。
+ * 任何一条不合法都抛 BAD_RESPONSE（对端坏了），而不是让 scrypt 抛内部错误。
+ */
+export function sanitizeKdf(raw) {
+  if (raw == null) return { ...KDF_DEFAULTS }
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new AppError('BAD_RESPONSE', '对端报来的 kdf 参数不是对象')
+  }
+  const int = (value, fallback) => (Number.isInteger(value) ? value : fallback)
+  const N = int(raw.N, KDF_DEFAULTS.N)
+  const r = int(raw.r, KDF_DEFAULTS.r)
+  const p = int(raw.p, KDF_DEFAULTS.p)
+  if (N < KDF_LIMITS.minN || N > KDF_LIMITS.maxN || (N & (N - 1)) !== 0) {
+    throw new AppError('BAD_RESPONSE', `对端报来的 kdf.N 不合法：${raw.N}（需要 ${KDF_LIMITS.minN}–${KDF_LIMITS.maxN} 之间的 2 的幂）`)
+  }
+  if (r < 1 || r > KDF_LIMITS.maxR) {
+    throw new AppError('BAD_RESPONSE', `对端报来的 kdf.r 不合法：${raw.r}（需要 1–${KDF_LIMITS.maxR}）`)
+  }
+  if (p < 1 || p > KDF_LIMITS.maxP) {
+    throw new AppError('BAD_RESPONSE', `对端报来的 kdf.p 不合法：${raw.p}（需要 1–${KDF_LIMITS.maxP}）`)
+  }
+  if (128 * N * r > KDF_LIMITS.maxMemoryBytes) {
+    throw new AppError('BAD_RESPONSE', `对端报来的 kdf 参数要的内存太多（N=${N} r=${r}），已拒绝`)
+  }
+  // keylen 只认 32：会话密钥长度不由对端决定。
+  return { N, r, p, keylen: KDF_DEFAULTS.keylen }
+}
+
+/**
+ * 解一个 base64 字段，并核对长度。缺字段/长度不对都报 BAD_RESPONSE，
+ * 免得 `Buffer.from(undefined, 'base64')` 抛出来的 TypeError 冒到路由层变成 500。
+ */
+export function decodeB64Field(value, { label, min = 1, max = 1024 } = {}) {
+  const name = label ?? '字段'
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new AppError('BAD_RESPONSE', `对端没有给出合法的 ${name}`)
+  }
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value)) {
+    throw new AppError('BAD_RESPONSE', `对端给出的 ${name} 不是 base64`)
+  }
+  const buf = Buffer.from(value, 'base64')
+  if (buf.length < min || buf.length > max) {
+    throw new AppError('BAD_RESPONSE', `对端给出的 ${name} 长度不对：${buf.length} 字节（需要 ${min}–${max}）`)
+  }
+  return buf
 }
 
 export async function deriveMasterKey(password, salt, params = KDF_DEFAULTS) {

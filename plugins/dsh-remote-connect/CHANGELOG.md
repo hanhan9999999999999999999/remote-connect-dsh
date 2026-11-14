@@ -2,6 +2,16 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.53 — 2026-11-15
+
+### 修复
+
+- **握手应答被当成可信输入**：`/hello` 回来的 `salt`、`serverNonce`、`kdf` 以前直接拿去算——少一个字段就是 `Buffer.from(undefined)` 的 `TypeError`，`kdf.N` 报个十亿就让本机去申请一个不存在的体积（`maxmem` 拦住了，但抛的是 `ERR_CRYPTO_INVALID_SCRYPT_PARAMS`），`keylen` 也能被对端改。现在先收一遍再算：`salt`/`serverNonce` 必须是 16–64 字节的 base64，`kdf` 必须是对象、`N` 是 16384–1048576 之间的 2 的幂、`r`≤32、`p`≤16，且 `128*N*r` ≤ 512 MB，`keylen` 一律 32。任何一条不合法都报 `BAD_RESPONSE` 并点名字段，不让 `Buffer`/`scrypt` 的内部错误冒成 500。
+
+### 新增
+
+- `test/handshake-guard.mjs`（17 项断言）：`sanitizeKdf` 的收拢与拒绝矩阵（离谱 N、非 2 的幂、低于默认、r 越界、N×r 合起来吃内存、非对象）；`decodeB64Field` 的缺字段/非 base64/长度越界；外加一个真 HTTP 假服务端，验证「少给 serverNonce / 少给 salt / 给个吃内存的 kdf / nonce 太短」都变成 `BAD_RESPONSE` 且 3 秒内返回。
+
 ## 1.0.52 — 2026-11-15
 
 ### 修复

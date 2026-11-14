@@ -214,7 +214,7 @@
 | 面板轮询把 `syncs/` 翻来覆去读 | 「最近批次」要逐个批次读 `journal.json`，而状态接口几秒一次。现在 `Applier.listRecent()` 有 2 秒缓存（`recentTtlMs` 可调），新增批次、落地完成、回滚都会立刻让缓存失效，`limit` 在缓存之上裁剪——批次再多轮询也不会越读越慢（`test/local-syncs.mjs`） |
 | 断开时跟对端告别失败 | `/bye` 发不出去（对端已经关了、连接烂了）**不影响本地收尾**：先把 peer 从 `clients` 摘掉，再清掉 `peers.json` 里的 `token`/`sk`（密码保留），失败只记一条 warn。否则 token 会一直躺在磁盘上、界面一直显示已连接，用户只能靠重启摆脱它（`test/disconnect-hardening.mjs`） |
 | 被排除的文件没人看得见 | 扫描结果以前只带最多 40 条明细、总数不出门，界面一个字都不说，勾了「包含凭据」也没法确认生效没有。现在清单里带 `excludedTotal` 与按原因代号（`secret` / `log` / `big`）分组的 `excludedReasons`，界面按当前语言翻出来；明细每条也带 `code`，点「看看是哪些」能展开具体路径（最多 40 条，多出来的用一句「还有 N 个没列出来」交代）（`test/inventory-excluded.mjs`） |
-| 没带令牌就发 POST | 先把令牌本身查一遍（有没有、过没过期），再决定要不要读 body。以前是先读 body 再验身份，128 条连接 × 4 MB 上限就是半个 GB 的内存，谁都能凑出来（`test/server-auth.mjs`） |
+| 对端在握手应答里乱写 | 握手应答（`/hello` 回的 `salt`、`serverNonce`、`kdf`）是**对端说的**，本机以前照着算：少一个字段就是 `Buffer.from(undefined)` 的 TypeError，`kdf.N` 报个十亿就让本机去申请一个不存在的体积。现在先收一遍——`salt`/`serverNonce` 必须是 16–64 字节的 base64，`kdf` 必须是对象、`N` 是 16384–1048576 之间的 2 的幂、`r`≤32、`p`≤16，且 `128*N*r` 不超过 512 MB，`keylen` 一律按 32 走；不合法就 `BAD_RESPONSE` 说清哪个字段不对（`test/handshake-guard.mjs`） || 没带令牌就发 POST | 先把令牌本身查一遍（有没有、过没过期），再决定要不要读 body。以前是先读 body 再验身份，128 条连接 × 4 MB 上限就是半个 GB 的内存，谁都能凑出来（`test/server-auth.mjs`） |
 
 ## 7. 兼容性
 

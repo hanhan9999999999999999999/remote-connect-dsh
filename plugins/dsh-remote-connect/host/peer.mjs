@@ -11,12 +11,14 @@ import {
 } from './util.mjs'
 import {
   decryptJson,
+  decodeB64Field,
   deriveMasterKey,
   deriveSessionKey,
   encryptJson,
   handshakeProof,
   randomNonce,
   safeEqualBuf,
+  sanitizeKdf,
   sessionReadyProof,
 } from './crypto.mjs'
 import { bodyDigest, signRequest } from './sign.mjs'
@@ -231,8 +233,12 @@ export class RemotePeer {
     })
     const hello = await this.#jsonFrom(helloRes, false)
     if (hello?.error) throw new AppError(hello.error.code, hello.error.message)
-    const serverNonce = Buffer.from(hello.serverNonce, 'base64')
-    const master = await deriveMasterKey(pwd, Buffer.from(hello.salt, 'base64'), hello.kdf)
+    // 握手应答是**对端说的**：缺字段、长度不对、kdf 要的内存离谱，
+    // 都要在这里挡下来并说清是「对端坏了」，而不是让 Buffer/scrypt 抛内部错误。
+    const serverNonce = decodeB64Field(hello.serverNonce, { label: 'serverNonce', min: 16, max: 64 })
+    const salt = decodeB64Field(hello.salt, { label: 'salt', min: 16, max: 64 })
+    const kdf = sanitizeKdf(hello.kdf)
+    const master = await deriveMasterKey(pwd, salt, kdf)
     const proof = handshakeProof(master, clientNonce, serverNonce, this.device.id)
     const verifyRes = await this.#request({
       method: 'POST',
