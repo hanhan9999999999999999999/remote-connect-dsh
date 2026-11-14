@@ -25,6 +25,12 @@ import { packStream } from './pack.mjs'
 
 const BASE = '/dsh-link/v1'
 
+/**
+ * 单个 JSON 响应的字节上限。清单/同步记录再大也就几 MB，
+ * 但如果对端出错或被人改过，`/syncs` 可以一直往外吐——这条线得有个闸。
+ */
+export const MAX_JSON_BYTES = 64 * 1024 * 1024
+
 /** 会话还能用吗：留 30 秒余量，避免「以为还有 2 秒」的请求刚好撞在过期边界上。 */
 export function sessionUsable(session, now = Date.now()) {
   if (!session || !session.token || !session.expiresAt) return false
@@ -43,6 +49,8 @@ export class RemotePeer {
     this.device = device
     this.session = null
     this.agent = null
+    /** 单个 JSON 响应最多收多少字节（测试里会调小）。 */
+    this.maxJsonBytes = MAX_JSON_BYTES
   }
 
   get id() {
@@ -91,17 +99,29 @@ export class RemotePeer {
     const lib = this.#lib()
     const options = { ...this.#baseOptions(path), method, headers: { ...headers } }
     return new Promise((resolve, reject) => {
-      const req = lib.request(options, (res) => resolve(res))
+      const state = { timedOut: false }
+      const req = lib.request(options, (res) => {
+        // 把「这次超时了」标记带到响应流上，读 body 的那一侧才知道该报 TIMEOUT。
+        // 只靠 socket 超时的话，读 body 阶段拿到的是一条裸 ECONNRESET / aborted。
+        if (state.timedOut) res.__dlTimedOut = true
+        res.__dlState = state
+        resolve(res)
+      })
       req.on('error', (err) => {
         // 超时是我们自己 destroy 出来的 AppError，别把它压成 NETWORK——
         // index.js 要靠 TIMEOUT 区分「对端没响应」和「网线断了」。
         if (err instanceof AppError) reject(err)
+        else if (state.timedOut) reject(new AppError('TIMEOUT', '对端迟迟没有响应', { cause: err.code }))
         else reject(new AppError('NETWORK', networkMessage(err), { cause: err.code }))
       })
+      const fireTimeout = () => {
+        state.timedOut = true
+        req.destroy(new AppError('TIMEOUT', '连接超时'))
+      }
       if (timeoutMs) {
-        req.setTimeout(timeoutMs, () => req.destroy(new AppError('TIMEOUT', '连接超时')))
+        req.setTimeout(timeoutMs, fireTimeout)
       } else {
-        req.setTimeout(120_000, () => req.destroy(new AppError('TIMEOUT', '长时间没有响应')))
+        req.setTimeout(120_000, fireTimeout)
       }
       if (bodyStream) {
         bodyStream.on('error', (err) => req.destroy(err))
@@ -133,7 +153,26 @@ export class RemotePeer {
 
   async #jsonFrom(res, expectOk = true) {
     const chunks = []
-    for await (const chunk of res) chunks.push(chunk)
+    let size = 0
+    const limit = this.maxJsonBytes
+    try {
+      for await (const chunk of res) {
+        size += chunk.length
+        if (size > limit) {
+          res.destroy()
+          throw new AppError('BAD_RESPONSE', `对端返回的内容超过 ${Math.round(limit / 1024 / 1024)} MB，已中止`)
+        }
+        chunks.push(chunk)
+      }
+    } catch (err) {
+      if (err instanceof AppError) throw err
+      // 读 body 阶段的失败（对端半路没了、被我们的超时掐断）以前是一条裸
+      // ECONNRESET / aborted，冒到路由层就成了 500「服务端坏了」。
+      if (res.__dlTimedOut || res.__dlState?.timedOut) {
+        throw new AppError('TIMEOUT', '对端迟迟没有把内容发完', { cause: err.code })
+      }
+      throw new AppError('NETWORK', networkMessage(err), { cause: err.code })
+    }
     const buf = Buffer.concat(chunks)
     let parsed = null
     try {

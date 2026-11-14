@@ -2,6 +2,19 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.42 — 2026-11-15
+
+### 修复
+
+- **对端半死不活时，界面只会看到「服务端坏了」**：请求侧只负责把响应头拿回来，真正读内容在 `#jsonFrom()`，而那里对错误一概不管。于是对端发完响应头就挂住、socket 超时被掐断时，抛的是裸 `ECONNRESET / aborted`——路由层 `statusFor` 认不出这个码，只好回 **500**，用户看到的是「本机服务坏了」，其实是对端不回话。现在：
+  - 读 body 阶段被超时掐断 → `TIMEOUT`「对端迟迟没有把内容发完」；
+  - 半路真断开 → `NETWORK`（文案来自 `networkMessage`，不再是 `aborted` 这种原始错误）。
+
+### 新增
+
+- **单个 JSON 响应的字节上限 64 MB**（`peer.maxJsonBytes`）：`/syncs`、`/inventory` 这类接口要是回一份坏数据、或者对端被改过一直往外吐，以前会一路 `Buffer.concat` 到内存报警。超限立刻 `res.destroy()` 并报 `BAD_RESPONSE`「对端返回的内容超过 64 MB，已中止」。
+- `test/peer-body.mjs`（6 项断言）：挂住的响应体报 `TIMEOUT` 且文案可读、不再出现裸 `ECONNRESET`、半路断开报 `NETWORK`、超量内容报 `BAD_RESPONSE`、超限后 3 秒内就中止（不等对端吐完）、正常响应照旧解析。
+
 ## 1.0.41 — 2026-11-15
 
 ### 修复

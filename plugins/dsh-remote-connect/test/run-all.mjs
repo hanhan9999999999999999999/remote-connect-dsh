@@ -20,6 +20,7 @@ const suites = [
   'guard.mjs',
   'peer-session.mjs',
   'peer-reconnect.mjs',
+  'peer-body.mjs',
   'rollback.mjs',
   'apply-guard.mjs',
   'pack-safety.mjs',
