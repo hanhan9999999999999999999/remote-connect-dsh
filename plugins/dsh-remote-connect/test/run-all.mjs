@@ -24,6 +24,7 @@ const suites = [
   'config.mjs',
   'sync-cancel.mjs',
   'http-status.mjs',
+  'peers.mjs',
   'docs-guard.mjs',
   'install.mjs',
   'plugin-smoke.mjs',
