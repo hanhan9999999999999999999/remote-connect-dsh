@@ -18,6 +18,9 @@ const JOURNAL_VERSION = 1
 /** 内存里最多保留多少个批次状态（再老的只留在磁盘上的 syncs/ 里） */
 const MAX_STATES = 20
 
+/** 本地批次列表的缓存时长：面板轮询很密，但 2 秒内重复翻目录没有必要 */
+const RECENT_TTL_MS = 2000
+
 /** 批次编号会拼进路径，格式必须是本插件自己生成的那种（`rid()` 产出的十六进制串） */
 const SYNC_ID = /^[A-Za-z0-9_-]{1,64}$/
 
@@ -29,6 +32,8 @@ export class Applier {
     this.sync = sync
     this.onEvent = onEvent
     this.syncs = new Map()
+    this.recentCache = { at: 0, rows: null }
+    this.recentReads = 0
   }
 
   #dir(syncId) {
@@ -78,6 +83,7 @@ export class Applier {
     }
     this.syncs.set(syncId, state)
     this.#trimStates()
+    this.#invalidateRecent()
     await writeJson(path.join(dir, 'meta.json'), {
       version: JOURNAL_VERSION,
       id: syncId,
@@ -274,6 +280,7 @@ export class Applier {
         entries: journal,
       })
       await pruneBackups(this.dataHome, this.sync.backupKeep ?? 5)
+      this.#invalidateRecent()
       this.onEvent?.({ type: 'apply-done', syncId, files: state.files, bytes: state.bytes })
       return this.progress(syncId)
     } catch (err) {
@@ -289,13 +296,23 @@ export class Applier {
   }
 
   async listRecent(limit = 20) {
+    // 面板每隔几秒就会调一次状态，而这里要逐个批次读 journal.json：
+    // 批次一多，等于每次轮询都把整个 syncs/ 目录翻一遍。2 秒内的重复调用直接给缓存，
+    // 新增批次、回滚之后立刻失效，读到的一定是新的。
+    const ttl = Number.isFinite(this.recentTtlMs) ? this.recentTtlMs : RECENT_TTL_MS
+    const now = Date.now()
+    if (this.recentCache.rows && now - this.recentCache.at < ttl) {
+      return this.recentCache.rows.slice(0, limit)
+    }
     const base = path.join(this.dataHome, 'syncs')
     let names = []
     try {
       names = await fsp.readdir(base)
     } catch {
+      this.recentCache = { at: now, rows: [] }
       return []
     }
+    this.recentReads += 1
     const rows = []
     for (const name of names) {
       const metaFile = path.join(base, name, 'journal.json')
@@ -324,7 +341,14 @@ export class Applier {
         }
       }
     }
-    return rows.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)).slice(0, limit)
+    const sorted = rows.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0)).slice(0, 100)
+    this.recentCache = { at: now, rows: sorted }
+    return sorted.slice(0, limit)
+  }
+
+  /** 本地有批次变化（新增、落地、回滚）时调一下，别让面板看到缓存里的旧列表。 */
+  #invalidateRecent() {
+    this.recentCache = { at: 0, rows: null }
   }
 
   async rollback(syncId) {
@@ -385,6 +409,7 @@ export class Applier {
     journal.rolledBackAt = Date.now()
     journal.rollback = { restored, removed, partial, missing }
     await writeJson(journalPath, journal)
+    this.#invalidateRecent()
     this.onEvent?.({ type: 'rollback', syncId, restored, removed, partial, missing })
     return { syncId, restored, removed, partial, missing }
   }

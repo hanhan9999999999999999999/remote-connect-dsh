@@ -25,6 +25,7 @@ const suites = [
   'server-limits.mjs',
   'server-auth.mjs',
   'rollback.mjs',
+  'local-syncs.mjs',
   'apply-guard.mjs',
   'pack-safety.mjs',
   'tar-hostile.mjs',

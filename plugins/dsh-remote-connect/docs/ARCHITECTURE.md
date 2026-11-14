@@ -211,6 +211,7 @@
 | 同步途中断开或删掉那台设备 | 它名下的任务统一走取消（`cancelled`，不是 `failed`）并掐断连接，否则任务会一直停在「准备中」——设备都已经不在列表里了，用户也没地方点取消。任务对象在 `#runSync` 里留了一根 `abortNow` 线：即使对端已从 `clients` 里摘掉，取消照样能生效（`test/forget-cancel.mjs`） |
 | 批次编号或备份路径越界 | 批次编号会拼进 `<data>/syncs/<id>`，而它是从对端请求里来的（`/rollback`、`/progress` 都带着它），所以先按 `^[A-Za-z0-9_-]{1,64}$` 校验，不合规报 `BAD_INPUT`；`journal` 里记的备份路径同样当不可信输入，出了数据目录就按「备份没了」处理（算 `missing`），不去复制别处的文件（`test/rollback.mjs`） |
 | 端口记录与实际不一致 | 手机通道的端口被占后会自动顺延，但 `runtime/port.json` 有可能没写进去（目录只读、磁盘满）：桥接在 8900 跑着、记录还指 8899。顺延成功却没写成时返回 `portWriteFailed` + 一句 `warning`；`status` 在记录那个端口问不到服务时，会去监听表里认「命令行像 `server.mjs` 的那个进程」，认出来就报真实端口并标 `portMismatch`，认不出来才报未运行——不假装有服务，也不假装没服务（`test/phone-port-sync.mjs`） |
+| 面板轮询把 `syncs/` 翻来覆去读 | 「最近批次」要逐个批次读 `journal.json`，而状态接口几秒一次。现在 `Applier.listRecent()` 有 2 秒缓存（`recentTtlMs` 可调），新增批次、落地完成、回滚都会立刻让缓存失效，`limit` 在缓存之上裁剪——批次再多轮询也不会越读越慢（`test/local-syncs.mjs`） |
 | 断开时跟对端告别失败 | `/bye` 发不出去（对端已经关了、连接烂了）**不影响本地收尾**：先把 peer 从 `clients` 摘掉，再清掉 `peers.json` 里的 `token`/`sk`（密码保留），失败只记一条 warn。否则 token 会一直躺在磁盘上、界面一直显示已连接，用户只能靠重启摆脱它（`test/disconnect-hardening.mjs`） |
 | 被排除的文件没人看得见 | 扫描结果以前只带最多 40 条明细、总数不出门，界面一个字都不说，勾了「包含凭据」也没法确认生效没有。现在清单里带 `excludedTotal` 与按原因代号（`secret` / `log` / `big`）分组的 `excludedReasons`，界面按当前语言翻出来；明细每条也带 `code`，点「看看是哪些」能展开具体路径（最多 40 条，多出来的用一句「还有 N 个没列出来」交代）（`test/inventory-excluded.mjs`） |
 | 没带令牌就发 POST | 先把令牌本身查一遍（有没有、过没过期），再决定要不要读 body。以前是先读 body 再验身份，128 条连接 × 4 MB 上限就是半个 GB 的内存，谁都能凑出来（`test/server-auth.mjs`） |
