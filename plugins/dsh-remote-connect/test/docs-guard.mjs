@@ -136,16 +136,21 @@ for (const entry of pkg.files ?? []) {
 
 const linkFiles = ['README.md', 'SECURITY.md', 'CHANGELOG.md', ...['docs'].flatMap((d) => readdirSync(path.join(pkgDir, d)).map((f) => `${d}/${f}`))]
 const broken = []
+let checked = 0
 for (const rel of linkFiles) {
   const text = read(rel)
   for (const m of text.matchAll(/\]\((?!https?:|#|mailto:)([^)\s]+)\)/g)) {
     const target = decodeURIComponent(m[1].split('#')[0])
     if (!target) continue
-    if (!existsSync(path.resolve(path.dirname(path.join(pkgDir, rel)), target))) broken.push(`${rel} → ${target}`)
+    const abs = path.resolve(path.dirname(path.join(pkgDir, rel)), target)
+    // 指向包外的相对链接（比如仓库根的文件）在安装后的包里本来就不存在，不算坏链
+    if (path.relative(pkgDir, abs).startsWith('..')) continue
+    checked += 1
+    if (!existsSync(abs)) broken.push(`${rel} → ${target}`)
   }
 }
 assert.deepEqual(broken, [], `文档里的相对链接指不到文件：${broken.join('、')}`)
 
 console.log(
-  `docs ok · 路由 ${ownRoutes.length}+${phoneRoutes.length} · 版本 ${pkg.version} · 词条 ${zh.length} 中英对齐 · 链接 0 坏链`,
+  `docs ok · 路由 ${ownRoutes.length}+${phoneRoutes.length} · 版本 ${pkg.version} · 词条 ${zh.length} 中英对齐 · 链接 ${checked} 条 0 坏链`,
 )
