@@ -2,6 +2,18 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.22 — 2026-11-15
+
+### 修复
+
+- **点名补装一个不存在的插件，过去会回「成功」**：`installPluginDeps(['no-such-plugin'])` 以前返回 `{ok: true, results: []}`——什么都没做，却说成了成功。现在返回 `unknown: ['no-such-plugin']` 且 `ok: false`。
+- 依赖本来就齐全的插件会出现在 `skipped` 里，不再和「安装成功」混在一起（结果仍为空、`ok` 为 true）。
+- 超时被我们自己掐断时，过去报成 `EXIT_null`（看不懂），现在报 `TIMEOUT`；`timeoutMs` 也夹到 5 秒–30 分钟，调用方传 0 或负数不再变成「立刻 SIGKILL」。
+
+### 新增
+
+- `test/deps.mjs` 扩到 7 项断言，新增三项：点不存在的插件 → `unknown` 且 `ok=false`；已齐全的插件 → `skipped`；**超时**——把假 `npm`（睡 30 秒）放进 PATH，预算被抬到 5 秒下限，于是必然由插件自己掐断并报 `TIMEOUT`；另外补了一条真失败（离线依赖）→ `EXIT_<code>` 且 `ok=false`。
+
 ## 1.0.21 — 2026-11-15
 
 ### 修复

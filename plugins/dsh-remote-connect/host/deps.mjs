@@ -76,6 +76,8 @@ function npmInvocation(args) {
 
 /** Run `npm install --omit=dev` in one plugin directory. */
 function installOne(plugin, { onLine, timeoutMs = NPM_TIMEOUT_MS } = {}) {
+  // 超时至少给 5 秒、最长 30 分钟：调用方传 0 或负数不该变成「立刻 SIGKILL」
+  const budget = Math.min(Math.max(Number(timeoutMs) || NPM_TIMEOUT_MS, 5_000), 30 * 60 * 1000)
   return new Promise((resolve) => {
     const lines = []
     const push = (line) => {
@@ -86,6 +88,7 @@ function installOne(plugin, { onLine, timeoutMs = NPM_TIMEOUT_MS } = {}) {
       onLine?.(text)
     }
     let child
+    let timedOut = false
     try {
       const inv = npmInvocation(['install', '--omit=dev', '--no-audit', '--no-fund'])
       child = spawn(inv.command, inv.args, {
@@ -98,9 +101,10 @@ function installOne(plugin, { onLine, timeoutMs = NPM_TIMEOUT_MS } = {}) {
       return
     }
     const timer = setTimeout(() => {
-      push(`[timeout] npm install exceeded ${Math.round(timeoutMs / 1000)}s`)
+      timedOut = true
+      push(`[timeout] npm install exceeded ${Math.round(budget / 1000)}s`)
       child.kill('SIGKILL')
-    }, timeoutMs)
+    }, budget)
     child.stdout?.on('data', (chunk) => String(chunk).split('\n').forEach(push))
     child.stderr?.on('data', (chunk) => String(chunk).split('\n').forEach(push))
     child.on('error', (error) => {
@@ -109,7 +113,9 @@ function installOne(plugin, { onLine, timeoutMs = NPM_TIMEOUT_MS } = {}) {
     })
     child.on('close', (code) => {
       clearTimeout(timer)
-      resolve({ id: plugin.id, ok: code === 0, code: code === 0 ? 'OK' : `EXIT_${code}`, lines })
+      // 被我们自己掐掉的，别把 `EXIT_null` 这种看不懂的东西丢给用户
+      const outcome = timedOut ? 'TIMEOUT' : code === 0 ? 'OK' : `EXIT_${code ?? 'NULL'}`
+      resolve({ id: plugin.id, ok: outcome === 'OK', code: outcome, lines })
     })
   })
 }
@@ -117,16 +123,24 @@ function installOne(plugin, { onLine, timeoutMs = NPM_TIMEOUT_MS } = {}) {
 /** Install dependencies for the requested plugin ids (or every plugin missing them). */
 export async function installPluginDeps(ids, { onLine, timeoutMs } = {}) {
   const scan = await scanPluginDeps()
-  const wanted = new Set(ids && ids.length ? ids : scan.missing)
+  const asked = Array.isArray(ids) ? ids.filter((id) => typeof id === 'string' && id) : []
+  const known = new Set(scan.plugins.map((p) => p.id))
+  // 点名了但本机压根没装这个插件：不能装作装好了
+  const unknown = asked.filter((id) => !known.has(id))
+  const wanted = new Set(asked.length ? asked : scan.missing)
   const targets = scan.plugins.filter((p) => p.status === 'missing' && wanted.has(p.id))
-  if (targets.length === 0) return { ok: true, results: [], scan }
+  const skipped = scan.plugins.filter((p) => p.status === 'ok' && wanted.has(p.id)).map((p) => p.id)
+  if (targets.length === 0) {
+    const after = await scanPluginDeps()
+    return { ok: unknown.length === 0, results: [], skipped, unknown, scan: after }
+  }
   const results = []
   for (const plugin of targets) {
-    onLine?.(`\n▸ ${plugin.id}: npm install (${plugin.missing.length} missing)`) 
+    onLine?.(`\n▸ ${plugin.id}: npm install (${plugin.missing.length} missing)`)
     results.push(await installOne(plugin, { onLine, timeoutMs }))
   }
   const after = await scanPluginDeps()
-  return { ok: results.every((r) => r.ok), results, scan: after }
+  return { ok: results.every((r) => r.ok) && unknown.length === 0, results, skipped, unknown, scan: after }
 }
 
 /** Fail loudly when a caller asks for a plugin that is not installed locally. */

@@ -43,4 +43,56 @@ console.log(`PASS repair · npm install ok (${lines.length} lines)`)
 assert.throws(() => assertPluginId('../etc'), /非法插件标识/)
 console.log('PASS id validation')
 
+// 点名了一个本机压根没装的插件：不能装作「已装好」
+const unknown = await installPluginDeps(['no-such-plugin'])
+assert.deepEqual(unknown.unknown, ['no-such-plugin'])
+assert.deepEqual(unknown.results, [])
+assert.equal(unknown.ok, false, 'unknown 非空时 ok 必须是 false')
+console.log('PASS unknown id · 报 unknown 且 ok=false')
+
+// 依赖齐全的插件：算 skipped，不算失败
+const skipped = await installPluginDeps(['standalone'])
+assert.deepEqual(skipped.skipped, ['standalone'])
+assert.deepEqual(skipped.results, [])
+assert.equal(skipped.ok, true)
+console.log('PASS skipped · 已齐全的插件不重复安装')
+
+// 超时：用假 npm 拖住 30 秒，预算会被抬到 5 秒下限，于是必然由我们自己掐断
+await fs.mkdir(path.join(dsh, 'plugins', 'slowpoke'), { recursive: true })
+await fs.writeFile(
+  path.join(dsh, 'plugins', 'slowpoke', 'package.json'),
+  JSON.stringify({ name: 'slowpoke', version: '1.0.0', dependencies: { 'never-installed': '1.0.0' } }),
+)
+const binDir = path.join(tmp, 'fake-npm')
+await fs.mkdir(binDir, { recursive: true })
+if (process.platform === 'win32') {
+  await fs.writeFile(path.join(binDir, 'npm.cmd'), '@echo off\r\nping -n 30 127.0.0.1 >nul\r\n')
+} else {
+  const shim = path.join(binDir, 'npm')
+  await fs.writeFile(shim, '#!/bin/sh\nsleep 30\n')
+  await fs.chmod(shim, 0o755)
+}
+const oldPath = process.env.PATH
+process.env.PATH = binDir + path.delimiter + (oldPath ?? '')
+let timed
+try {
+  timed = await installPluginDeps(['slowpoke'], { timeoutMs: 1 })
+} finally {
+  process.env.PATH = oldPath
+}
+assert.equal(timed.ok, false)
+assert.equal(timed.results[0].code, 'TIMEOUT', `应当报 TIMEOUT，实际 ${timed.results[0].code}`)
+console.log('PASS timeout · 被掐掉时报 TIMEOUT 而不是 EXIT_null')
+
+// 装不上（离线依赖）时报 EXIT_<code>，同样不是 ok
+await fs.mkdir(path.join(dsh, 'plugins', 'broken'), { recursive: true })
+await fs.writeFile(
+  path.join(dsh, 'plugins', 'broken', 'package.json'),
+  JSON.stringify({ name: 'broken', version: '1.0.0', dependencies: { 'dsh-link-no-such-package-xyz': '9.9.9' } }),
+)
+const broken = await installPluginDeps(['broken'], { timeoutMs: 60_000 })
+assert.equal(broken.ok, false)
+assert.match(broken.results[0].code, /^EXIT_\d+$/, `应当报 EXIT_<code>，实际 ${broken.results[0].code}`)
+console.log('PASS failure · npm 失败时报 EXIT_<code> 且 ok=false')
+
 await fs.rm(tmp, { recursive: true, force: true })
