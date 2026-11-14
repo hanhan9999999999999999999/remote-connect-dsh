@@ -117,6 +117,9 @@ window.__ModuleLoader__.load({
       'sync.cancel': '取消',
       'sync.done': '同步完成',
       'sync.depsHint': '对端有 {n} 个插件缺依赖，请到「诊断 → 插件依赖」补齐',
+      'sync.progressUnreliable': '进度查询失败 {n} 次：同步本身在跑，但上面的数字可能不准',
+      'sync.pollStale': '已经连续 {n} 次问不到任务状态，界面上的进度可能停住了（连接或服务端可能有问题）',
+      'sync.resultLine': '本次同步 {files} 个文件 · {size}',
       'sync.failed': '同步失败',
       'sync.recent': '本机接收记录',
       'sync.noRecent': '还没有接收记录',
@@ -278,6 +281,9 @@ window.__ModuleLoader__.load({
       'sync.cancel': 'Cancel',
       'sync.done': 'Sync complete',
       'sync.depsHint': '{n} plugin(s) still need dependencies — open Diagnostics → Plugin dependencies',
+      'sync.progressUnreliable': 'Progress lookup failed {n} time(s): the sync is still running, but the numbers above may be stale',
+      'sync.pollStale': 'Could not read the task status {n} time(s) in a row — the progress shown here may be frozen',
+      'sync.resultLine': 'Synced {files} file(s) · {size}',
       'sync.failed': 'Sync failed',
       'sync.recent': 'Received on this machine',
       'sync.noRecent': 'Nothing received yet',
@@ -1153,6 +1159,9 @@ window.__ModuleLoader__.load({
       const [starting, setStarting] = useState(false)
       const [task, setTask] = useState(null)
       const [depsMissing, setDepsMissing] = useState(0)
+      // 连续问不到任务状态的次数：问不到时界面上的进度是冻住的，
+      // 以前这里只有一句「keep polling」，用户看到的就是一条不动的进度条。
+      const [pollFails, setPollFails] = useState(0)
 
       useEffect(() => {
         if (!peerId && peers[0]) setPeerId(peers[0].id)
@@ -1194,6 +1203,7 @@ window.__ModuleLoader__.load({
           try {
             const next = await api('/task/status', 'POST', { id: task.id })
             setTask(next)
+            setPollFails(0)
             if (next.phase === 'done') {
               notify(t('sync.done'))
               api('/deps').then((d) => setDepsMissing((d && d.missing && d.missing.length) || 0)).catch(() => {})
@@ -1203,7 +1213,8 @@ window.__ModuleLoader__.load({
               reload(true)
             }
           } catch {
-            /* keep polling */
+            // 继续轮询，但要说出来：连续失败到第三次就在界面上标一句「进度可能停住了」。
+            setPollFails((n) => n + 1)
           }
         }, 800)
         return () => clearInterval(id)
@@ -1327,6 +1338,19 @@ window.__ModuleLoader__.load({
                 ),
                 h('div', { className: 'dlk-bar' }, h('i', { style: { width: pct(task.done || task.bytes, task.total || task.totalBytes) + '%' } })),
                 task.error ? h('div', { className: 'dlk-hint', style: { color: 'var(--dsw-alias-state-error-primary,#f85149)' } }, task.error) : null,
+                task.progressFailures > 0
+                  ? h('div', { className: 'dlk-hint', style: { color: 'var(--dsw-alias-state-warning-primary,#d29922)' } }, t('sync.progressUnreliable', { n: task.progressFailures }))
+                  : null,
+                pollFails >= 3
+                  ? h('div', { className: 'dlk-hint', style: { color: 'var(--dsw-alias-state-warning-primary,#d29922)' } }, t('sync.pollStale', { n: pollFails }))
+                  : null,
+                task.phase === 'done' && task.result
+                  ? h('div', { className: 'dlk-hint' },
+                      t('sync.resultLine', {
+                        files: task.result.files ?? 0,
+                        size: fmtBytes(task.result.bytes ?? 0),
+                      }))
+                  : null,
                 depsMissing > 0 && task.phase === 'done'
                   ? h('div', { className: 'dlk-hint', style: { color: 'var(--dsw-alias-state-warning-primary,#d29922)' } }, t('sync.depsHint', { n: depsMissing }))
                   : null,

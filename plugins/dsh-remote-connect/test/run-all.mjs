@@ -9,6 +9,7 @@ const suites = [
   'i18n-guard.mjs',
   'a11y.mjs',
   'tasks.mjs',
+  'task-fields.mjs',
   'port-scan.mjs',
   'inventory-guard.mjs',
   'inventory-secrets.mjs',
