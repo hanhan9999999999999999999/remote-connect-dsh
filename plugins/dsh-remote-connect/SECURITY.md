@@ -25,8 +25,10 @@ ready = HMAC(SK, "ready")
 ```
 
 - 密码不参与任何网络报文；`/hello` 只返回 salt、KDF 参数、服务端 nonce 与挑战 id；
+- 连接密码是 3 组 4 字符（`ABCD-EFGH-JKLM` 这种形状），字母表去掉了容易看错的 I / O / 0 / 1；
+  输入时忽略空白与大小写；
 - 挑战 60 秒过期并绑定来源 IP；验证失败累计 10 次锁定该 IP 10 分钟；
-- 会话令牌 32 字节随机，12 小时过期；改密码会清空所有会话与主密钥缓存；
+- 会话令牌 32 字节随机，12 小时过期；改密码会清空所有会话与主密钥缓存，并断开已有的出站对端连接；
 - 每次请求签名：
 
 ```
@@ -62,10 +64,11 @@ HMAC-SK( METHOD | pathname | timestamp | nonce | sha256(body) )
 
 ## 5. 默认不传的东西
 
-- `node_modules/`、`.git/`、`dist/`、`build/`、缓存目录；
-- `*.log`、`*.tmp`、`*.part`、`*.map`；
-- `.credentials.yaml`、`.dshw-api.json`、`model_config.json`、`.env*`、
-  `*.pem/key/p12/pfx`、`id_rsa*`、`.netrc`、`cookies*`；
+- 目录：`node_modules/`、`.git/`、`.svn/`、`.hg/`、`__pycache__/`、`.cache/`、`.next/`、`.turbo/`、
+  `.venv/`、`venv/`、`dist/`、`build/`、`coverage/`；
+- 文件：`*.log`、`*.tmp`、`*.part`、`*.swp`、`*.map`、`*.lock`、`.DS_Store`、`Thumbs.db`；
+- 凭据类：`.credentials.yaml`、`.dshw-api.json`、`model_config.json`、`.env*`、
+  `*.pem/key/p12/pfx`、`id_rsa*`（含 ed25519 / ecdsa）、`.netrc`、`cookies*`；
 - `storages/session_projcache/`；
 - **远程互联自己的整个数据目录**（`config.json`、`peers.json`、`backups/`、`syncs/`）。
 

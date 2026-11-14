@@ -12,6 +12,7 @@ const suites = [
   'inventory-guard.mjs',
   'deps.mjs',
   'bridge-dir.mjs',
+  'security.mjs',
   'docs-guard.mjs',
   'install.mjs',
   'plugin-smoke.mjs',
