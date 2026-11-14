@@ -19,13 +19,14 @@ import {
 } from './crypto.mjs'
 import {
   APP_ID,
+  AppError,
   VERSION,
   clampInt,
   ensureDir,
   hostname,
   lanAddresses,
+  parseBool,
   platformLabel,
-  readJson,
   rid,
   writeJson,
 } from './util.mjs'
@@ -111,37 +112,116 @@ export class ConfigStore {
 
   async load() {
     await ensureDir(path.dirname(this.file))
-    const existing = await readJson(this.file, null)
-    let cfg = existing
-    if (!cfg || typeof cfg !== 'object' || cfg.version !== 1) {
+    const existing = await this.#readExisting()
+    let cfg
+    if (existing === null) {
       cfg = defaultConfig()
       await writeJson(this.file, cfg)
     } else {
-      cfg = this.#migrate(cfg)
+      cfg = this.#migrate(existing)
+      if (existing.version !== 1) await writeJson(this.file, cfg)
     }
     this.value = cfg
     this.loadedAt = Date.now()
     return cfg
   }
 
+  /**
+   * 读现有配置：文件不存在或为空 → null（当作第一次运行）；
+   * 内容不是合法 JSON → 抛错，**不覆盖**。静默用默认值写回去会把主人的连接密码弄丢。
+   */
+  async #readExisting() {
+    let text
+    try {
+      text = await fsp.readFile(this.file, 'utf8')
+    } catch (err) {
+      if (err?.code === 'ENOENT') return null
+      throw new AppError('CONFIG_UNREADABLE', `读不到配置文件 ${this.file}：${err?.code ?? err?.message}`, {
+        cause: err?.code,
+      })
+    }
+    if (!text.trim()) return null
+    let parsed
+    try {
+      parsed = JSON.parse(text)
+    } catch (err) {
+      throw new AppError(
+        'CONFIG_BROKEN',
+        `配置文件不是合法 JSON（${this.file}）：${err.message}。我没有覆盖它——先备份再删掉，插件会重新生成配置。`,
+        { path: this.file },
+      )
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new AppError('CONFIG_BROKEN', `配置文件里不是对象（${this.file}）。先备份再删掉，插件会重新生成配置。`, {
+        path: this.file,
+      })
+    }
+    return parsed
+  }
+
+  /** 合并默认值，并把每个字段的类型/范围收一遍——手改坏的配置不该让插件起不来。 */
   #migrate(cfg) {
     const base = defaultConfig()
+    const src = cfg && typeof cfg === 'object' ? cfg : {}
+    const str = (value, fallback, max = 64) =>
+      typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : fallback
+    const stamp = (value) => (Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : Date.now())
+
     const merged = {
-      ...base,
-      ...cfg,
-      device: { ...base.device, ...(cfg.device ?? {}) },
-      server: { ...base.server, ...(cfg.server ?? {}) },
-      auth: { ...base.auth, ...(cfg.auth ?? {}) },
+      version: 1,
+      device: { ...base.device, ...(src.device ?? {}) },
+      server: { ...base.server, ...(src.server ?? {}) },
+      auth: { ...base.auth, ...(src.auth ?? {}) },
       sync: {
         ...base.sync,
-        ...(cfg.sync ?? {}),
-        categories: { ...base.sync.categories, ...(cfg.sync?.categories ?? {}) },
+        ...(src.sync ?? {}),
+        categories: { ...base.sync.categories, ...(src.sync?.categories ?? {}) },
       },
-      ui: { ...base.ui, ...(cfg.ui ?? {}) },
+      ui: { ...base.ui, ...(src.ui ?? {}) },
     }
-    if (!merged.auth.password) merged.auth.password = generatePassword()
-    if (!merged.auth.salt) merged.auth.salt = randomBytes(16).toString('base64')
-    if (!merged.device.id) merged.device.id = `dev_${rid(10)}`
+
+    merged.device.id = str(merged.device.id, `dev_${rid(10)}`, 64)
+    merged.device.name = str(merged.device.name, defaultDeviceName(), 48)
+    merged.device.platform = str(merged.device.platform, base.device.platform, 24)
+    merged.device.createdAt = stamp(merged.device.createdAt)
+
+    merged.server.enabled = parseBool(merged.server.enabled, base.server.enabled)
+    merged.server.discovery = parseBool(merged.server.discovery, base.server.discovery)
+    merged.server.allowLan = parseBool(merged.server.allowLan, base.server.allowLan)
+    merged.server.port = clampInt(merged.server.port, 1024, 65535, DEFAULT_PORT)
+    merged.server.bind = str(merged.server.bind, base.server.bind, 64)
+
+    if (!merged.auth.password || typeof merged.auth.password !== 'string') merged.auth.password = generatePassword()
+    const saltOk =
+      typeof merged.auth.salt === 'string' && Buffer.from(merged.auth.salt, 'base64').length === 16
+    if (!saltOk) merged.auth.salt = randomBytes(16).toString('base64')
+    const kdf = merged.auth.kdf && typeof merged.auth.kdf === 'object' ? merged.auth.kdf : {}
+    const pow2 = (n, fallback) => {
+      // 只允许 ≥ 默认强度的 2 的幂：手改小了不该悄悄降低 KDF 强度
+      const v = clampInt(n, fallback, 1 << 20, fallback)
+      return (v & (v - 1)) === 0 ? v : fallback
+    }
+    merged.auth.kdf = {
+      N: pow2(kdf.N, KDF_DEFAULTS.N),
+      r: clampInt(kdf.r, 1, 32, KDF_DEFAULTS.r),
+      p: clampInt(kdf.p, 1, 16, KDF_DEFAULTS.p),
+      keylen: KDF_DEFAULTS.keylen,
+    }
+    merged.auth.changedAt = stamp(merged.auth.changedAt)
+
+    const categories = {}
+    for (const key of Object.keys(base.sync.categories)) {
+      categories[key] = parseBool(merged.sync.categories?.[key], base.sync.categories[key])
+    }
+    merged.sync.categories = categories
+    merged.sync.includeCredentials = parseBool(merged.sync.includeCredentials, false)
+    merged.sync.maxFileMb = clampInt(merged.sync.maxFileMb, 1, 65536, base.sync.maxFileMb)
+    merged.sync.maxTotalMb = clampInt(merged.sync.maxTotalMb, 1, 65536, base.sync.maxTotalMb)
+    merged.sync.backupKeep = clampInt(merged.sync.backupKeep, 1, 50, base.sync.backupKeep)
+    merged.sync.compress = parseBool(merged.sync.compress, base.sync.compress)
+
+    merged.ui.lastTab = str(merged.ui.lastTab, base.ui.lastTab, 32)
+    merged.ui.language = merged.ui.language === 'en' ? 'en' : 'zh'
     return merged
   }
 
@@ -206,8 +286,8 @@ export class ConfigStore {
   async setPassword(rawPassword) {
     const cfg = await this.get()
     const password = String(rawPassword ?? '').trim()
-    if (password.length < 6) throw new Error('密码至少 6 位')
-    if (password.length > 128) throw new Error('密码过长')
+    if (password.length < 6) throw new AppError('BAD_INPUT', '密码至少 6 位')
+    if (password.length > 128) throw new AppError('BAD_INPUT', '密码过长（最多 128 位）')
     const next = JSON.parse(JSON.stringify(cfg))
     next.auth.password = password
     next.auth.salt = randomBytes(16).toString('base64')
@@ -275,14 +355,24 @@ export function buildConnectUri(cfg, address) {
 
 export function parseConnectUri(uri) {
   const text = String(uri ?? '').trim()
-  if (!text) throw new Error('连接串为空')
-  if (!/^dshlink:\/\//i.test(text)) throw new Error('连接串必须以 dshlink:// 开头')
+  if (!text) throw new AppError('BAD_INPUT', '连接串为空')
+  if (!/^dshlink:\/\//i.test(text)) throw new AppError('BAD_INPUT', '连接串必须以 dshlink:// 开头')
   const withScheme = text.replace(/^dshlink:\/\//i, 'http://')
-  const url = new URL(withScheme)
+  let url
+  try {
+    url = new URL(withScheme)
+  } catch {
+    throw new AppError('BAD_INPUT', `连接串格式不对：${text.slice(0, 80)}`)
+  }
+  const host = url.hostname
+  if (!host) throw new AppError('BAD_INPUT', '连接串里没有主机地址')
   const port = Number(url.port || DEFAULT_PORT)
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new AppError('BAD_INPUT', `连接串的端口不对：${url.port || '(空)'}`)
+  }
   const pwd = url.searchParams.get('pwd') || ''
   const name = url.searchParams.get('name') || ''
-  return { host: url.hostname, port, password: pwd, name, raw: text }
+  return { host, port, password: pwd, name, raw: text }
 }
 
 export async function ensureIdentity() {

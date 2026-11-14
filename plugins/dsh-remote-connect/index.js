@@ -199,7 +199,7 @@ function statusFor(code) {
   if (code === 'BAD_PASSWORD' || code === 'LOCKED_OUT') return 401
   if (code === 'NOT_CONNECTED' || code === 'NEED_PASSWORD' || code === 'NO_PASSWORD') return 409
   if (code === 'PEER_UNKNOWN' || code === 'TASK_UNKNOWN') return 404
-  if (code === 'NO_HOST' || code === 'METHOD') return 400
+  if (code === 'NO_HOST' || code === 'METHOD' || code === 'BAD_INPUT') return 400
   if (code === 'NETWORK' || code === 'TIMEOUT' || code === 'NOT_DSH_LINK') return 502
   return 500
 }

@@ -21,6 +21,7 @@ const suites = [
   'pack.mjs',
   'push-guard.mjs',
   'frames.mjs',
+  'config.mjs',
   'docs-guard.mjs',
   'install.mjs',
   'plugin-smoke.mjs',
