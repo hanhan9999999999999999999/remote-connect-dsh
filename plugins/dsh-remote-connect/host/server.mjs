@@ -2,7 +2,6 @@
  * dsh-remote-connect · sync server (the side that gets connected to)
  */
 import http from 'node:http'
-import { createGunzip } from 'node:zlib'
 import { pipeline } from 'node:stream/promises'
 import {
   APP_NAME,
@@ -27,7 +26,7 @@ import { buildConnectUri, dataHome } from './config.mjs'
 import { Applier } from './apply.mjs'
 import { PackCache, packStream, preparePack } from './pack.mjs'
 import { Discovery } from './discovery.mjs'
-import { FrameDecoderTransform, FrameEncoderTransform } from './frames.mjs'
+import { FrameEncoderTransform, decodeFrames } from './frames.mjs'
 import { listProfiles } from './inventory.mjs'
 import { CLOCK_SKEW_MS, FailureTracker, NONCE_WINDOW_MS, clientIp, sanitizeDevice } from './guard.mjs'
 
@@ -581,9 +580,9 @@ export class LinkServer {
   async #receiveApply(req, res, syncId, session) {
     const headerTotal = Number(req.headers['x-dl-total'] ?? 0)
     this.logger?.info('apply', `开始接收 ${syncId}`)
-    const tarStream = req.pipe(new FrameDecoderTransform(session.sk)).pipe(createGunzip())
+    const link = decodeFrames(req, session.sk)
     try {
-      const progress = await this.applier.applyStream(syncId, tarStream)
+      const progress = await this.applier.applyStream(syncId, link.stream)
       this.bytesIn += progress.bytes
       this.logger?.info('apply', `应用完成 ${syncId}：${progress.files} 个文件`)
       this.#enc(res, session, { ok: true, ...progress, headerTotal })
@@ -591,6 +590,9 @@ export class LinkServer {
       this.logger?.error('apply', `应用失败 ${syncId}：${err.message}`)
       const p = this.applier.progress(syncId)
       this.#error(res, session, 500, err.code ?? 'APPLY_FAILED', err.message, p ? { progress: p } : undefined)
+    } finally {
+      // 落地失败（路径越界、超限……）时对端还在往外传：不关掉的话这条上传流会一直挂着。
+      link.destroy()
     }
   }
 

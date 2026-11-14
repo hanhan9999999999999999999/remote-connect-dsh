@@ -2,6 +2,21 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.33 — 2026-11-15
+
+### 修复
+
+- **被连接的一侧，坏帧流同样会把进程抛死**：服务端接收上传（`#receiveApply`）也是 `req.pipe(new FrameDecoderTransform(...)).pipe(createGunzip())`，那两环没有 `error` 监听——和 1.0.32 修的是同一类问题，只是发生在「收」的那一头。对端发来一段解不开的帧，DSH 一样会被整个抛掉。
+- **上传失败后那条流没人关**：落地报错（路径越界、超限……）时对端还在往外传，`finally` 里补 `link.destroy()`。
+
+### 变更
+
+- 「解密 → 解压」这条链路抽成 `host/frames.mjs` 的 `decodeFrames(source, key)`，返回 `{ stream, destroy() }`；`host/peer.mjs` 的 `pull()` 与服务端 `#receiveApply` 共用一份实现——免得两边各写一遍、各漏一处（这次就是漏在服务端）。
+
+### 新增
+
+- `test/frames.mjs` 加两项：`decodeFrames` 正常解回原样（线上顺序是「加密帧套着 gzip」）、坏帧时报错而不是把进程抛死。
+
 ## 1.0.32 — 2026-11-15
 
 ### 修复

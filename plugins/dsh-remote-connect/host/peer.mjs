@@ -3,7 +3,6 @@
  */
 import http from 'node:http'
 import https from 'node:https'
-import { createGunzip } from 'node:zlib'
 import {
   PROTOCOL,
   VERSION,
@@ -22,7 +21,7 @@ import {
   safeEqualBuf,
   sessionReadyProof,
 } from './crypto.mjs'
-import { FrameDecoderTransform, FrameEncoderTransform } from './frames.mjs'
+import { FrameEncoderTransform, decodeFrames } from './frames.mjs'
 import { packStream } from './pack.mjs'
 
 const BASE = '/dsh-link/v1'
@@ -304,23 +303,15 @@ export class RemotePeer {
       const err = await this.#jsonFrom(res, false)
       throw new AppError(err?.error?.code ?? 'EXPORT_FAILED', err?.error?.message ?? '对端拒绝导出')
     }
-    const decoder = new FrameDecoderTransform(this.session.sk)
-    const gunzip = createGunzip()
-    const tar = res.pipe(decoder).pipe(gunzip)
-    // 解码/解压这两环以前没有 error 监听：对端发来一段解不开的帧（或压缩流坏了），
-    // Transform 会直接 emit('error')，没人接就把整个进程抛死。
-    // 现在把它转成 tar 上的错误，交给 applyStream 的 pipeline reject 出去。
-    decoder.on('error', (err) => tar.destroy(err))
-    gunzip.on('error', (err) => tar.destroy(err))
+    const link = decodeFrames(res, this.session.sk)
     try {
-      const result = await applier.applyStream(state.id, tar)
+      const result = await applier.applyStream(state.id, link.stream)
       onProgress?.({ phase: 'done', ...result, totalBytes: Number(result?.bytes ?? prep.totalBytes ?? 0) })
       return { ...result, manifest: prep.manifest }
     } finally {
       // 不管成没成都把这条下载流关掉：失败时（路径越界、校验不符、超限……）
       // 对端还在继续往外传，不 destroy 的话 socket 会一直占着，几 GB 的包会在后台继续往本机淌。
-      if (!res.destroyed) res.destroy()
-      if (!tar.destroyed) tar.destroy()
+      link.destroy()
     }
   }
 

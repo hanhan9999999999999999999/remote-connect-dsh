@@ -9,7 +9,8 @@ import { randomBytes } from 'node:crypto'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { FrameDecoder, encodeFrame } from '../host/crypto.mjs'
-import { FrameDecoderTransform, FrameEncoderTransform } from '../host/frames.mjs'
+import { FrameDecoderTransform, FrameEncoderTransform, decodeFrames } from '../host/frames.mjs'
+import { createGzip } from 'node:zlib'
 
 const key = randomBytes(32)
 let pass = 0
@@ -117,5 +118,34 @@ await ok('空流往返不产生任何输出', async () => {
   assert.equal(out.length, 0)
 })
 
-console.log(`frames ok · 9 项断言 · 往返 / 分片 / 篡改 / 乱序 / 超长 / 截断（${pass} 通过、${fail} 失败）`)
+/* decodeFrames：线上是「加密帧套着 gzip」，两头都要自己收场 */
+const gzipOf = async (buf) =>
+  new Promise((resolve, reject) => {
+    const gz = createGzip()
+    const parts = []
+    gz.on('data', (c) => parts.push(c))
+    gz.on('end', () => resolve(Buffer.concat(parts)))
+    gz.on('error', reject)
+    gz.end(buf)
+  })
+
+await ok('decodeFrames 把帧流解回原样', async () => {
+  const plain = Buffer.from('hello 帧流 · decodeFrames · 你好')
+  const wire = Buffer.concat([encodeFrame(key, 0, await gzipOf(plain))])
+  const link = decodeFrames(Readable.from([wire]), key)
+  const parts = []
+  for await (const chunk of link.stream) parts.push(chunk)
+  link.destroy()
+  assert.equal(Buffer.concat(parts).toString('utf8'), plain.toString('utf8'))
+})
+
+await ok('decodeFrames 遇到解不开的帧时报错，而不是把进程抛死', async () => {
+  const link = decodeFrames(Readable.from([Buffer.alloc(64 * 1024, 7)]), key)
+  await assert.rejects(async () => {
+    for await (const chunk of link.stream) void chunk
+  }, /帧过大|invalid|unexpected/i)
+  link.destroy()
+})
+
+console.log(`frames ok · ${pass} 项断言 · 往返 / 分片 / 篡改 / 乱序 / 超长 / 截断 / 解码链（${pass} 通过、${fail} 失败）`)
 if (fail) process.exit(1)
