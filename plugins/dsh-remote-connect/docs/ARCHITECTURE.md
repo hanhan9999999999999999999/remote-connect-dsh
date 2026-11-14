@@ -216,13 +216,15 @@
 | 被排除的文件没人看得见 | 扫描结果以前只带最多 40 条明细、总数不出门，界面一个字都不说，勾了「包含凭据」也没法确认生效没有。现在清单里带 `excludedTotal` 与按原因代号（`secret` / `log` / `big`）分组的 `excludedReasons`，界面按当前语言翻出来；明细每条也带 `code`，点「看看是哪些」能展开具体路径（最多 40 条，多出来的用一句「还有 N 个没列出来」交代）（`test/inventory-excluded.mjs`） |
 | 批次建了却一个字节都没开始 | 两条这样的路：①我拉取时对端在开下载流之前就失败（`prepare` 已建批次，本地没人收）；②我自己推送时对端已经建好批次、我这边没发出去（`PUT` 直接断）。以前这两种都会在对端或本机留下一个永远停在「接收中」的批次——`#trimStates` 只收 `done`/`failed`，面板上挂着一条永远不动的记录，用户也没地方取消。现在 `Applier.discard()` 把它落成 `failed` 并记原因，拉取两侧各自收尾；推送失败时顺手发一条 `DELETE /apply/<syncId>?reason=…` 让对方收掉（这条是尽力而为，失败不盖住原始错误）（`test/apply-discard.mjs`、`test/server-auth.mjs`） |
 | 一个读不了的子目录拖垮整次扫描 | walk() 以前把 opendir 的错（权限不足、被别的程序锁住、路径过长）原样抛出去——用户看到的是整个分类「扫描失败」。现在这类错只记一笔「读不了（权限不足）」（code: denied），继续扫别的目录；stat 失败、迭代途中目录被删也一样记一笔而不是静默跳过。目录递归另加 MAX_DEPTH = 64 的深度上限，超了就整支算作「目录层级太深」（code: deep）。两者都进 excludedTotal/excludedReasons 与可展开的明细，界面那句话也从「已按规则跳过」改成「有 N 个文件没进清单」（`test/inventory-read-errors.mjs`） |
-| 对端在握手应答里乱写 | 握手应答（`/hello` 回的 `salt`、`serverNonce`、`kdf`）是**对端说的**，本机以前照着算：少一个字段就是 `Buffer.from(undefined)` 的 TypeError，`kdf.N` 报个十亿就让本机去申请一个不存在的体积。现在先收一遍——`salt`/`serverNonce` 必须是 16–64 字节的 base64，`kdf` 必须是对象、`N` 是 16384–1048576 之间的 2 的幂、`r`≤32、`p`≤16，且 `128*N*r` 不超过 512 MB，`keylen` 一律按 32 走；不合法就 `BAD_RESPONSE` 说清哪个字段不对（`test/handshake-guard.mjs`） || 没带令牌就发 POST | 先把令牌本身查一遍（有没有、过没过期），再决定要不要读 body。以前是先读 body 再验身份，128 条连接 × 4 MB 上限就是半个 GB 的内存，谁都能凑出来（`test/server-auth.mjs`） |
+| 对端在握手应答里乱写 | 握手应答（`/hello` 回的 `salt`、`serverNonce`、`kdf`）是**对端说的**，本机以前照着算：少一个字段就是 `Buffer.from(undefined)` 的 TypeError，`kdf.N` 报个十亿就让本机去申请一个不存在的体积。现在先收一遍——`salt`/`serverNonce` 必须是 16–64 字节的 base64，`kdf` 必须是对象、`N` 是 16384–1048576 之间的 2 的幂、`r`≤32、`p`≤16，且 `128*N*r` 不超过 512 MB，`keylen` 一律按 32 走；不合法就 `BAD_RESPONSE` 说清哪个字段不对（`test/handshake-guard.mjs`） |
+| 没带令牌就发 POST | 先把令牌本身查一遍（有没有、过没过期），再决定要不要读 body。以前是先读 body 再验身份，128 条连接 × 4 MB 上限就是半个 GB 的内存，谁都能凑出来（`test/server-auth.mjs`） |
 
 ## 7. 兼容性
 
 - 协议带 `v1`，`/health` 返回 `app`、`protocol` 与 `version`；对端不是本插件或协议不符时报 `NOT_DSH_LINK`，
   UI 显示「对端不是远程互联服务，或协议版本不兼容」。
-- 界面上每一句文案都必须走 `t('…')`：`test/i18n-guard.mjs` 会扫描 `client.js`，字典之外的字符串里出现中文就报错（注释例外），同时核对中英键集合、占位符（`{n}` / `{size}` / `{time}`）一致，以及 `t('…')` 用到的键都存在。
+- 界面上每一句文案都必须走 `t('…')`：`test/i18n-guard.mjs` 会扫描 `client.js`，字典之外的字符串里出现中文就报错（`/* */` 注释例外——那是写给人看的文风，不会显示给用户；注释之外 CSS 里的中文照样会红），同时核对中英键集合、占位符（`{n}` / `{size}` / `{time}`）一致，以及 `t('…')` 用到的键都存在。
+- 键盘可达：标签栏是 ARIA tabs 模式（roving `tabIndex` + 左右键/Home/End），开关与勾选是真 `button` 带 `aria-checked`，提示条与加载态各有 `role`；`.dlk-btn` / `.dlk-tab` / `.dlk-input` / `.dlk-switch` / `.dlk-check` / `.dlk-block` 都给了 `:focus-visible` 描边（宿主页面常把全局 outline 关掉），系统开「减少动态效果」时过渡全部停掉。`Btn` 会把调用方多传的属性原样摊到 `button` 上——以前只解构自己认识的几个，`ConfirmBtn` 的「Esc 撤防」根本挂不上去（`test/a11y.mjs`）。
 - 插件不碰 DSH 内部 API：host 半只用 `ctx.get('webServer')`（`export const inject = ['webServer']`，
   没有它插件不会加载），client 半只用 `ctx.slots` 与 `locale`，缺失时设置页不会出现「远程互联」分区。
 - Windows / macOS / Linux 均可运行；路径处理一律走 `node:path` 与 `fileURLToPath`。

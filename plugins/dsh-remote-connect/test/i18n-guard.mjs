@@ -187,11 +187,31 @@ expect('字典之外的字符串里没有中文（注释除外）', () => {
   ]
   const inDict = (pos) => dictRanges.some(([a, b]) => pos >= a && pos <= b)
 
+  // 样式表也是一段字符串，但它不是界面文字：CSS 注释里的中文是写给人看的，
+  // 不会显示给用户。注释之外的 CSS 中文仍然算问题（那才是会漏到界面上的 content）。
+  const cssAt = text.indexOf('const css = `')
+  const cssStart = cssAt >= 0 ? text.indexOf('`', cssAt) + 1 : -1
+  const cssEnd = cssStart > 0 ? text.indexOf('`', cssStart) : -1
+  const inCss = (pos) => cssStart > 0 && pos >= cssStart && pos < cssEnd
+  const cssComment = new Uint8Array(text.length)
+  for (let p = cssStart; p > 0 && p < cssEnd; ) {
+    const open = text.indexOf('/*', p)
+    if (open < 0 || open >= cssEnd) break
+    const close = text.indexOf('*/', open + 2)
+    const stop = close < 0 || close >= cssEnd ? cssEnd : close + 2
+    for (let k = open; k < stop; k += 1) cssComment[k] = 1
+    p = stop
+  }
+
   // 一行里有好几个汉字也只算一处：按行号去重，否则一条文案会报成六条
   const badLines = new Set()
   for (let pos = 0; pos < text.length; pos += 1) {
     if (!/[\u4e00-\u9fff]/.test(text[pos])) continue
     if (inComment[pos]) continue
+    if (inCss(pos)) {
+      if (!cssComment[pos]) badLines.add(text.slice(0, pos).split('\n').length)
+      continue
+    }
     if (!inString[pos]) continue
     if (inDict(pos)) continue
     badLines.add(text.slice(0, pos).split('\n').length)

@@ -420,6 +420,12 @@ window.__ModuleLoader__.load({
 .dlk-btn[data-size=sm]{padding:3px 8px;font-size:11px}
 .dlk-input{appearance:none;font:inherit;font-size:12px;line-height:20px;padding:6px 10px;border-radius:8px;border:1px solid var(--dsw-alias-border-l2);background:transparent;color:var(--dsw-alias-label-primary);width:100%;min-width:0;outline:none}
 .dlk-input:focus{border-color:var(--dsw-alias-label-tertiary)}
+/* 键盘焦点必须看得见：宿主页面常把全局 outline 关掉，我们自己给一圈硬描边。
+   :focus-visible 只在键盘/辅助技术触发时出现，鼠标点击不会闪一下。 */
+.dlk-btn:focus-visible,.dlk-tab:focus-visible,.dlk-input:focus-visible,.dlk-switch:focus-visible,.dlk-check:focus-visible,.dlk-block:focus-visible{outline:2px solid var(--dsw-alias-label-primary);outline-offset:2px}
+.dlk-tab:focus-visible{outline-offset:-2px}
+/* 有人把系统的「减少动态效果」打开时，别让这些过渡继续动。 */
+@media (prefers-reduced-motion: reduce){.dlk-btn,.dlk-switch,.dlk-knob,.dlk-toast{transition:none}}
 .dlk-input::placeholder{color:var(--dsw-alias-label-tertiary)}
 .dlk-field{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1 1 140px}
 .dlk-label{font-size:12px;color:var(--dsw-alias-label-secondary)}
@@ -553,10 +559,13 @@ window.__ModuleLoader__.load({
       return h('span', { className: 'dlk-spin', 'aria-hidden': 'true' })
     }
 
-    function Btn({ children, onClick, variant, size, disabled, busy, title, type }) {
+    function Btn({ children, onClick, variant, size, disabled, busy, title, type, ...rest }) {
       return h(
         'button',
         {
+          // rest 里是调用方传的其它属性（onKeyDown、aria-live、data-* …）。
+          // 以前这里把它们全丢了：ConfirmBtn 传的 onKeyDown 根本没挂到按钮上。
+          ...rest,
           type: type || 'button',
           className: 'dlk-btn',
           'data-variant': variant,
@@ -584,6 +593,14 @@ window.__ModuleLoader__.load({
           variant: arming ? 'danger' : variant,
           size,
           disabled,
+          // 已经举起来的那只手，键盘用户也得能放下：Esc 撤防，不用等 3.5 秒。
+          onKeyDown: (e) => {
+            if (e.key === 'Escape' && arming) {
+              e.preventDefault()
+              setArming(false)
+            }
+          },
+          'aria-live': arming ? 'polite' : undefined,
           onClick: () => {
             if (!arming) {
               setArming(true)

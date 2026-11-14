@@ -13,7 +13,10 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const src = fs.readFileSync(path.join(here, '..', 'client.js'), 'utf8')
+// 默认检查仓库里的 client.js；传一个路径就检查那个文件，
+// 用来验证「故意写坏的副本」会不会被这条守卫抓住（不然守卫可能是空转的）。
+const target = process.argv[2] ? path.resolve(process.argv[2]) : path.join(here, '..', 'client.js')
+const src = fs.readFileSync(target, 'utf8')
 
 /* ---------------------------------------------------------------- 假 React */
 
@@ -208,6 +211,61 @@ for (const tree of [loadingTree, loadedTree]) {
     '这些元素挂了 onClick 却既不是按钮也没有 role，键盘用户点不到',
   )
 }
+
+/* 5. 键盘焦点看得见 ---------------------------------------------------- */
+
+// 宿主页面常把全局 outline 关掉，所以我们自己必须给一圈 :focus-visible。
+const FOCUSABLE_CLASSES = ['dlk-btn', 'dlk-tab', 'dlk-input', 'dlk-switch', 'dlk-check', 'dlk-block']
+const focusRule = /([^{}]*:focus-visible[^{}]*)\{([^}]*)\}/g
+const focusTargets = []
+let m
+while ((m = focusRule.exec(src))) {
+  const [, selector, body] = m
+  if (!/outline\s*:/.test(body)) continue
+  for (const cls of FOCUSABLE_CLASSES) {
+    if (selector.includes('.' + cls)) focusTargets.push(cls)
+  }
+}
+const missingFocus = FOCUSABLE_CLASSES.filter((c) => !focusTargets.includes(c))
+assert.deepEqual(missingFocus, [], `这些控件没有 :focus-visible 描边，键盘用户看不到焦点：${missingFocus.join(' / ')}`)
+
+assert.ok(
+  /\.dlk-input\{[^}]*outline:none/.test(src) ? /\.dlk-input:focus-visible[^{}]*\{[^}]*outline\s*:/.test(src) : true,
+  '.dlk-input 把 outline 关了却没给 :focus-visible 兜底 —— 输入框聚焦时没有任何可见提示',
+)
+
+assert.ok(
+  /@media \(prefers-reduced-motion: reduce\)\{[^}]*transition:none/.test(src),
+  '没有 prefers-reduced-motion 兜底：系统开了「减少动态效果」时过渡还在动',
+)
+
+/* 6. 按钮要能接住调用方传下来的属性 ------------------------------------ */
+
+// Btn 以前只解构自己认识的几个 prop，调用方传的 onKeyDown / aria-* 全被丢掉，
+// 于是 ConfirmBtn 的 Esc 撤防根本挂不到按钮上。
+function bodyOf(name) {
+  const at = src.indexOf(`function ${name}(`)
+  assert.ok(at >= 0, `找不到 ${name}`)
+  const open = src.indexOf(') {', src.indexOf('(', at))
+  assert.ok(open > at, `${name} 的形参列表找不着`)
+  let depth = 0
+  for (let i = open + 2; i < src.length; i += 1) {
+    if (src[i] === '{') depth += 1
+    else if (src[i] === '}') {
+      depth -= 1
+      if (depth === 0) return src.slice(open + 2, i)
+    }
+  }
+  throw new Error(`${name} 的函数体没闭合`)
+}
+
+const btnBody = bodyOf('Btn')
+assert.ok(/\.\.\.rest/.test(btnBody), 'Btn 没有把调用方的其它属性传下去（onKeyDown、aria-live 会静默丢失）')
+assert.ok(/\.\.\.rest/.test(btnBody.split('h(')[1] || ''), 'Btn 把 rest 收集起来了却没摊到 button 上')
+
+const confirmBody = bodyOf('ConfirmBtn')
+assert.ok(/Escape/.test(confirmBody), 'ConfirmBtn 没有 Esc 撤防：键盘用户只能干等 3.5 秒')
+assert.ok(/setArming\(false\)/.test(confirmBody), 'ConfirmBtn 的 Esc 分支没有真的撤防')
 
 console.log(
   `a11y ok · 标签 ${liveTabs.length} 个（roving tabIndex + 方向键 + aria-controls） · 开关/勾选 ${switches.length} 个有 aria-checked · 加载态有 role`,
