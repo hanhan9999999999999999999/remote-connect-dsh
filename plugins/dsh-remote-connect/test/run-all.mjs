@@ -22,6 +22,7 @@ const suites = [
   'apply-guard.mjs',
   'pack-safety.mjs',
   'tar-hostile.mjs',
+  'tar-write.mjs',
   'discovery.mjs',
   'pack.mjs',
   'push-guard.mjs',

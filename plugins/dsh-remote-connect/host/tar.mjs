@@ -15,8 +15,27 @@ const ZERO = Buffer.alloc(BLOCK)
 const MAX_META_BLOCK = 1024 * 1024
 
 function octal(value, width) {
-  const s = value.toString(8)
+  const n = Number(value)
+  if (!Number.isFinite(n) || n < 0) throw new Error(`tar 头的数值不合法：${value}`)
+  const s = Math.floor(n).toString(8)
+  // 以前这里是 padStart + '\0' 再交给 Buffer.write(..., width)：数值太大时
+  // 后几位会被 Buffer.write 默默截掉，写出来的头和真值不一致。
+  if (s.length > width - 1) throw new Error(`tar 头的字段超出宽度：${value} 放不进 ${width} 字节`)
   return s.padStart(width - 1, '0') + '\0'
+}
+
+/** 从尾部按 UTF-8 字节截断（保留文件名那一段），不切断多字节字符 */
+function fitBytes(str, max) {
+  const chars = Array.from(str)
+  let out = ''
+  let used = 0
+  for (let i = chars.length - 1; i >= 0; i -= 1) {
+    const n = Buffer.byteLength(chars[i], 'utf8')
+    if (used + n > max) break
+    out = chars[i] + out
+    used += n
+  }
+  return out
 }
 
 function paxRecord(key, value) {
@@ -45,7 +64,13 @@ function paxBlock(records) {
 
 export function makeHeader({ name, size = 0, mtime = 0, mode = 0o644, type = '0', uid = 0, gid = 0 }) {
   const block = Buffer.alloc(BLOCK)
-  block.write(name.slice(0, 100), 0, 100, 'utf8')
+  const nameBytes = Buffer.byteLength(name, 'utf8')
+  // ustar 的 name 字段只有 100 字节。以前超出部分被 Buffer.write 默默截掉，
+  // 于是「头里的名字」和「pax 里的名字」两回事；长名字必须走 pax，这里直接拒绝。
+  if (nameBytes > 100) {
+    throw new Error(`tar 头的名字超过 100 字节：${nameBytes}（长名字要走 pax 扩展头）`)
+  }
+  block.write(name, 0, 100, 'utf8')
   block.write(octal(mode & 0o7777, 8), 100, 8, 'ascii')
   block.write(octal(uid, 8), 108, 8, 'ascii')
   block.write(octal(gid, 8), 116, 8, 'ascii')
@@ -130,9 +155,11 @@ export async function* tarEntries(entries, { signal } = {}) {
       if (entry.cat) records.push(['DSH.cat', entry.cat])
       yield paxBlock(records)
     }
-    const fallbackName = needPax ? name.slice(-90).replace(/^.*\//, '_/') + name.slice(-40) : name
+    // pax 里带着完整路径；头里的名字只是给不认识 pax 的老工具看的占位。
+    // 以前写成 name.slice(-90).replace(...) + name.slice(-40)，末尾 40 个字符会被写两遍。
+    const fallbackName = needPax ? fitBytes(name, 100) : name
     yield makeHeader({
-      name: Buffer.byteLength(fallbackName) > 100 ? 'entry' : fallbackName,
+      name: Buffer.byteLength(fallbackName, 'utf8') > 100 ? 'entry' : fallbackName,
       size: entry.size,
       mtime: Math.floor((entry.mtime ?? Date.now()) / 1000),
       mode: entry.mode ?? 0o644,
