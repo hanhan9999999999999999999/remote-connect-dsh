@@ -19,6 +19,7 @@ const suites = [
   'pack-safety.mjs',
   'discovery.mjs',
   'pack.mjs',
+  'push-guard.mjs',
   'docs-guard.mjs',
   'install.mjs',
   'plugin-smoke.mjs',

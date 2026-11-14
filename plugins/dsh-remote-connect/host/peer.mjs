@@ -324,13 +324,27 @@ export class RemotePeer {
       timeoutMs: 30_000,
     })
     const syncId = prep.syncId
+    // 对端在 prepare 里会告诉我们它的上限。超了就别开始传——传几个 GB 再被拒绝是白费带宽。
+    const peerMax = Number(prep.maxTotalBytes ?? 0)
+    if (peerMax > 0 && totalBytes > peerMax) {
+      throw new AppError(
+        'TOO_LARGE',
+        `这次要传 ${totalBytes} 字节，超过对端上限 ${peerMax} 字节（让对方调高「同步上限」或分批同步）`,
+        { totalBytes, maxTotalBytes: peerMax },
+      )
+    }
     const source = packStream(entries).pipe(new FrameEncoder(this.session.sk))
     let sent = 0
     source.on('data', (chunk) => {
       sent += chunk.length
       onProgress?.({ phase: 'uploading', done: sent, total: totalBytes })
     })
-    const poller = setInterval(async () => {
+    // 进度是尽力而为：开始时勤一点，传久了慢慢退到 3 秒一次，别在大文件上传时刷出几百个请求。
+    let delay = 700
+    let timer = null
+    let stopped = false
+    const poll = async () => {
+      if (stopped) return
       try {
         const p = await this.requestJson('GET', `/progress?syncId=${encodeURIComponent(syncId)}`, {
           timeoutMs: 5000,
@@ -339,8 +353,13 @@ export class RemotePeer {
       } catch {
         /* progress is best-effort */
       }
-    }, 700)
-    poller.unref?.()
+      if (stopped) return
+      delay = Math.min(Math.round(delay * 1.6), 3000)
+      timer = setTimeout(poll, delay)
+      timer.unref?.()
+    }
+    timer = setTimeout(poll, delay)
+    timer.unref?.()
     try {
       const res = await this.#request({
         method: 'PUT',
@@ -357,7 +376,8 @@ export class RemotePeer {
       onProgress?.({ phase: 'done', done: totalBytes, total: totalBytes, result })
       return result
     } finally {
-      clearInterval(poller)
+      stopped = true
+      if (timer) clearTimeout(timer)
     }
   }
 

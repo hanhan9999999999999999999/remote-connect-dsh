@@ -62,7 +62,7 @@
   端口必须是 1–65535 的整数、`name`/`platform`/`version` 截断，缺字段的整条丢掉——
   否则一个乱发的包就能在列表里塞进端口为 `NaN` 的「对端」；
 - 所有路径在服务端二次校验（拒绝 `..`、绝对路径、盘符、保留名）；
-- 单文件上限 512 MB、单次同步上限 8 GB（可配置），超出在清单阶段就拒绝（清单已经带总大小，不会先把文件逐个哈希一遍再说超限）；
+- 单文件上限 512 MB、单次同步上限 8 GB（可配置 `sync.maxTotalMb`），超出在清单阶段就拒绝（清单已经带总大小，不会先把文件逐个哈希一遍再说超限）；推送方向更早——`/apply/prepare` 一收到对端声明的总大小就核对，超了回 413 `TOO_LARGE`，一个字节都不让传；
 - 默认**不传输**（`host/inventory.mjs` 里的 `SECRET_FILE` / `ALWAYS_EXCLUDE_*`）：
   `.credentials.yaml`、`.dshw-api.json`、`model_config.json`、`.env*`、`*.pem|key|p12|pfx`、
   `id_rsa|ed25519|ecdsa*`、`.netrc`、`cookies*`；`node_modules/`、`.git/`、`.venv/`、`dist/`、
@@ -117,8 +117,8 @@
 | POST | `/inventory` | 会话 | 请求体 `{cats, includeSecrets?}`；返回清单 + 统计 |
 | POST | `/export/prepare` | 会话 | 请求体 `{cats, manifestId}`；返回 `{packId, …}` |
 | GET | `/export/<packId>` | 会话 | 逐帧加密的 `tar.gz` 流 |
-| POST | `/apply/prepare` | 会话 | 建一次本地应用任务，返回 `{syncId}` |
-| PUT/POST | `/apply/<syncId>` | 会话 | 上传逐帧加密的 `tar.gz` 流（单请求上限 1 GB） |
+| POST | `/apply/prepare` | 会话 | 建一次本地应用任务，返回 `{syncId, maxTotalBytes}`；请求里的 `totalBytes` 超本机上限直接 413 `TOO_LARGE` |
+| PUT/POST | `/apply/<syncId>` | 会话 | 上传逐帧加密的 `tar.gz` 流（流式，上限由 `sync.maxTotalMb` 决定，已在 prepare 阶段核对过） |
 | GET | `/progress?syncId=` | 会话 | 应用进度（已写字节/总字节/当前文件） |
 | GET | `/syncs` | 会话 | 本机最近 20 次应用记录 |
 | POST | `/rollback` | 会话 | `{syncId}` 回滚一次应用 |

@@ -214,7 +214,7 @@ export class LinkServer {
     // everything below requires a valid session + signature
     const isStreamUpload =
       (req.method === 'PUT' || req.method === 'POST') && sub.startsWith('/apply/') && sub !== '/apply/prepare'
-    const body = req.method === 'GET' || isStreamUpload ? Buffer.alloc(0) : await jsonBody(req, this.#limitFor(sub))
+    const body = req.method === 'GET' || isStreamUpload ? Buffer.alloc(0) : await jsonBody(req, MAX_JSON)
     const session = this.#authorize(req, url, body, res)
     if (!session) return
 
@@ -237,8 +237,21 @@ export class LinkServer {
     }
     if (req.method === 'POST' && sub === '/apply/prepare') {
       const payload = this.#decryptBody(session, body)
+      // 对端要推多少，先算账：等它把几个 GB 传上来再报超限，等于白占带宽和磁盘。
+      const cfg = await this.store.get()
+      const maxTotalBytes = (cfg.sync.maxTotalMb ?? 8192) * 1024 * 1024
+      const want = Number(payload?.totalBytes ?? 0)
+      if (Number.isFinite(want) && want > maxTotalBytes) {
+        return this.#error(
+          res,
+          session,
+          413,
+          'TOO_LARGE',
+          `对端要传 ${want} 字节，超过本机上限 ${maxTotalBytes} 字节（改「同步上限」或分批）`,
+        )
+      }
       const state = await this.applier.prepare({ from: payload.from ?? session.device, meta: payload })
-      return this.#enc(res, session, { syncId: state.id })
+      return this.#enc(res, session, { syncId: state.id, maxTotalBytes })
     }
     if ((req.method === 'PUT' || req.method === 'POST') && sub.startsWith('/apply/')) {
       const syncId = sub.slice('/apply/'.length)
@@ -263,11 +276,6 @@ export class LinkServer {
       return this.#enc(res, session, { ok: true })
     }
     return this.#error(res, session, 404, 'NOT_FOUND', `未知接口 ${req.method} ${sub}`)
-  }
-
-  #limitFor(sub) {
-    if (sub.startsWith('/apply/')) return 1024 * 1024 * 1024
-    return MAX_JSON
   }
 
   async #selfInfo() {
