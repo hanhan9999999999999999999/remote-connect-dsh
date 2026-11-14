@@ -409,13 +409,19 @@ export class LinkService {
     const cfg = await this.store.get()
     const peer = await this.ensureConnected(task.peerId)
     task.phase = 'starting'
+    // 两个方向的进度字段不一样：推送的对端把字节数放在 `remote.*` 里，
+    // 拉取则由本地 applier 平铺在顶层。两种都认，否则拉取方向永远显示 0 字节、没有当前文件。
     const onProgress = (p) => {
+      if (!p) return
       if (p.phase) task.phase = p.phase
       if (typeof p.total === 'number') task.total = p.total
       if (typeof p.done === 'number') task.done = p.done
-      if (typeof p.totalBytes === 'number') task.totalBytes = p.totalBytes
-      if (p.remote?.bytes) task.bytes = p.remote.bytes
-      if (p.remote?.current) task.detail = p.remote.current
+      const totalBytes = p.totalBytes ?? p.remote?.totalBytes
+      if (typeof totalBytes === 'number') task.totalBytes = totalBytes
+      const bytes = p.bytes ?? p.remote?.bytes
+      if (typeof bytes === 'number') task.bytes = bytes
+      const current = p.current ?? p.remote?.current
+      if (current) task.detail = current
     }
     if (task.direction === 'push') {
       task.phase = 'hashing'

@@ -177,6 +177,10 @@
 或者 `failed`（带 `错误码: 消息`），或者用户点取消时先 `cancelling` 再落到 `cancelled`。
 取消优先：点了取消之后，即便底层连接是被掐断的，也不会被记成 `failed`。
 
+进度字段（`bytes` 已传字节、`totalBytes` 总量、`detail` 当前文件）两个方向都有值：推送的字节数来自对端
+`/progress` 的 `remote.*`，拉取来自本地 applier 平铺在顶层的同名字段，`service.mjs` 两种都认；
+空事件不会把已经记下的数字清掉。
+
 | 场景 | 处理 |
 | --- | --- |
 | 端口被占 | 启动前绑定探测（`server.mjs` 的 `start()`）；`EADDRINUSE` 报 `PORT_IN_USE` 并带上失败原因，换端口改 `server.port` |

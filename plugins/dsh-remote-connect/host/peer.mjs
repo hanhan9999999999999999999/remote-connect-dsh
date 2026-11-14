@@ -288,7 +288,7 @@ export class RemotePeer {
       payload: { cats, includeSecrets },
       timeoutMs: 10 * 60_000,
     })
-    onProgress?.({ phase: 'downloading', done: 0, total: prep.totalBytes, bytes: 0 })
+    onProgress?.({ phase: 'downloading', done: 0, total: prep.totalBytes, totalBytes: prep.totalBytes, bytes: 0 })
     const state = await applier.prepare({
       from: this.record,
       meta: { totalBytes: prep.totalBytes, totalFiles: prep.files },
@@ -306,7 +306,7 @@ export class RemotePeer {
     }
     const tar = res.pipe(new FrameDecoderTransform(this.session.sk)).pipe(createGunzip())
     const result = await applier.applyStream(state.id, tar)
-    onProgress?.({ phase: 'done', ...result })
+    onProgress?.({ phase: 'done', ...result, totalBytes: Number(result?.bytes ?? prep.totalBytes ?? 0) })
     return { ...result, manifest: prep.manifest }
   }
 
