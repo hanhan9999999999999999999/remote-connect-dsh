@@ -34,6 +34,7 @@ export const __test = {
   startStatusFor,
   portStatusFor,
   killPid,
+  switchPort,
 };
 
 /**
@@ -479,15 +480,29 @@ async function startBridgeOnce(opts = {}) {
 /**
  * 换端口：停掉旧端口上的桥接 → 把新端口写进 port.json → 在新端口起来。
  * 和「关闭」不同，这里不留 paused.flag —— 这是搬家，不是关机。
+ *
+ * 顺序上做了两处保守处理：
+ *   1. port.json 先写、写不进去就不搬 —— 否则桥接起来了、记录还指着旧端口，下次重启又搬回去；
+ *   2. 新端口起不来就退回旧端口：把记录改回去，并尽量把旧桥接叫回来，
+ *      不能让「换端口失败」变成「本来好好的服务没了」。
+ * deps 只为测试注入，生产调用一律用默认实现。
  */
-async function switchPort(target) {
+async function switchPort(target, deps = {}) {
+  const healthFn = deps.health ?? health;
+  const startFn = deps.startBridge ?? startBridgeOnce;
+  const killFn = deps.killPid ?? killPid;
+  const listenerFn = deps.listenerPid ?? listenerPid;
+  const writePort = deps.writePortJson ?? writePortJson;
+  const clearStaleFn = deps.clearStale ?? clearStale;
+  const portOf = deps.bridgePort ?? bridgePort;
+
   const p = Number(target);
   if (!Number.isInteger(p) || p < 1024 || p > 65535) return { switched: false, error: '端口要填 1024–65535 之间的整数' };
-  const cur = bridgePort();
-  const curAlive = await health(1200, cur);
+  const cur = portOf();
+  const curAlive = await healthFn(1200, cur);
   if (p === cur && curAlive) return { switched: true, unchanged: true, port: p };
 
-  const probe = await clearStale(p);
+  const probe = await clearStaleFn(p);
   if (probe.state === 'foreign') {
     return {
       switched: false,
@@ -497,13 +512,23 @@ async function switchPort(target) {
     };
   }
 
+  // 记录先落地：写不进去就原地不动，别把正在跑的服务弄丢
+  if (!writePort(p)) {
+    return {
+      switched: false,
+      port: p,
+      from: cur,
+      error: '写不进 runtime/port.json（目录不可写？），为了不弄丢正在跑的服务，这次没有换端口',
+    };
+  }
+
   // listenerPid 只认「自己的桥接」：端口上只有别人的程序时它返回 null，不会误杀
-  const oldPid = await listenerPid(cur);
+  const oldPid = await listenerFn(cur);
   if (oldPid) {
-    await killPid(oldPid);
+    await killFn(oldPid);
     const t1 = Date.now();
     while (Date.now() - t1 < 6000) {
-      if (!(await health(600, cur))) break;
+      if (!(await healthFn(600, cur))) break;
       await sleep(300);
     }
   }
@@ -515,9 +540,28 @@ async function switchPort(target) {
     }
   }
 
-  writePortJson(p);
-  const r = await startBridge({ port: p, autoPort: false });
-  return { switched: !!r.started, port: p, from: cur, ...r };
+  const r = await startFn({ port: p, autoPort: false });
+  if (!r || r.started !== true) {
+    // 新端口没起来：记录退回旧值，并试着把旧桥接叫回来
+    writePort(cur);
+    let restored = false;
+    try {
+      const back = await startFn({ port: cur, autoPort: false });
+      restored = !!back && back.started === true;
+    } catch {
+      restored = false;
+    }
+    return {
+      switched: false,
+      port: p,
+      from: cur,
+      rolledBack: true,
+      restored,
+      ...(r || {}),
+      error: `${(r && r.error) || '新端口没起来'}${restored ? `（已退回 ${cur} 端口继续服务）` : `（旧端口 ${cur} 也没能叫回来，请重试或手动启动）`}`,
+    };
+  }
+  return { switched: true, port: p, from: cur, ...r };
 }
 
 async function stopBridge() {

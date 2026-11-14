@@ -49,6 +49,7 @@ const suites = [
   'install.mjs',
   'plugin-smoke.mjs',
   'phone-http.mjs',
+  'phone-switch.mjs',
   'e2e.mjs',
 ]
 

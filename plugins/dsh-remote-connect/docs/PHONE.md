@@ -45,8 +45,10 @@ dsh-remote-connect:
 | GET | `/dsh-phone-api/status` | 运行状态、端口、公网地址、配对码、地址列表 |
 | POST | `/dsh-phone-api/start` | 清掉 `paused.flag` 并拉起桥接 |
 | POST | `/dsh-phone-api/stop` | 写 `paused.flag` 并杀掉监听进程（守护脚本不会自动拉回） |
-| POST | `/dsh-phone-api/port` | 换端口 |
+| POST | `/dsh-phone-api/port` | 换端口（见下） |
 | POST | `/dsh-phone-api/paircode` | 重新生成配对码 |
+
+**换端口的顺序是保守的**：先探目标端口（被别的程序占着就直接报冲突，一根手指都不动现有的桥接）→ 把新端口写进 `runtime/port.json`（写不进去就原地不动，免得「服务换了、记录还指旧端口」）→ 停掉旧端口上的桥接 → 在新端口起来。**新端口起不来时会退回**：记录改回旧端口，并尽量把旧桥接叫回来，返回值带 `rolledBack` / `restored`，界面上的错误文案会说明是「已退回 8899 继续服务」还是「旧端口也没能叫回来，请重试」。
 
 设置页的「手机通道」页签调的是 `/dsh-remote-connect-api/phone/*`，在**同一个进程里**直连上面这些函数，
 不走 `127.0.0.1` 回环——回环请求没有 renderer token，会被浏览器访问策略挡成 403。
