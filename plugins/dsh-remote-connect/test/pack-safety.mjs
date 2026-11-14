@@ -56,7 +56,9 @@ const quiet = () => {}
 await ok('safeJoin：拦截 ../、绝对路径、盘符、空段、NUL、保留名', () => {
   // 盘符那条拼起来写：docs-guard 会扫描代码里的绝对路径字面量，测试里的样例不该触发它
   const drivePath = 'C' + ':\\Windows\\x'
-  const bad = ['../x', 'a/../../b', '/etc/passwd', drivePath, 'a/./b', '', 'a//b', 'x\u0000y', 'CON', 'lpt1.txt']
+  const bad = ['../x', 'a/../../b', '/etc/passwd', drivePath, 'a/./b', '', 'a//b', 'x\u0000y']
+  // Windows 保留名只在 Windows 上被拦（Linux 上 CON 是合法文件名），断言跟着平台走
+  if (process.platform === 'win32') bad.push('CON', 'lpt1.txt')
   for (const rel of bad) {
     assert.throws(() => safeJoin(dshHome, rel), /./, `应当拒绝：${JSON.stringify(rel)}`)
   }

@@ -2,6 +2,14 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.13 — 2026-11-14
+
+1.0.12 在 ubuntu 的 CI 上红了：`safeJoin` 的 Windows 保留名检查（`CON`、`LPT1` 之类）只在 `process.platform === 'win32'` 时生效，而测试无条件断言这些名字必须被拒绝——Linux 上 `CON` 是合法文件名，断言自然失败。
+
+### 修复
+
+- `test/pack-safety.mjs`：Windows 保留名的两条断言改为只在 Windows 上加（`if (process.platform === 'win32') bad.push('CON', 'lpt1.txt')`）；其余断言（`../`、绝对路径、盘符、NUL 等）平台无关，照旧全跑。代码本身没有改动——`safeJoin` 的行为一直是对的，红的是测试的假设。
+
 ## 1.0.12 — 2026-11-14
 
 同步入口的安全边界做了一次复核，并补上守卫测试。代码本身没有漏洞，但以前这些边界**没有一条被测试盯着**——现在有了。
