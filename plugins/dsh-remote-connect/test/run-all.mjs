@@ -21,6 +21,7 @@ const suites = [
   'rollback.mjs',
   'apply-guard.mjs',
   'pack-safety.mjs',
+  'tar-hostile.mjs',
   'discovery.mjs',
   'pack.mjs',
   'push-guard.mjs',

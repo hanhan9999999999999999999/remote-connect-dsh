@@ -10,6 +10,9 @@ import { Readable } from 'node:stream'
 
 const BLOCK = 512
 const ZERO = Buffer.alloc(BLOCK)
+// pax / GNU 长名这类「元数据块」正常只有几十字节到几 KB。
+// 以前这里直接信头里写的长度：对端声明 8 GB，接收端就会在内存里攒到 8 GB。
+const MAX_META_BLOCK = 1024 * 1024
 
 function octal(value, width) {
   const s = value.toString(8)
@@ -72,8 +75,7 @@ function isZeroBlock(buf) {
   return true
 }
 
-function readOctal(buf, offset, length) {
-  if (buf[offset] & 0x80) {
+function readOctal(buf, offset, length) {  if (buf[offset] & 0x80) {
     // base-256
     let value = 0
     for (let i = offset + 1; i < offset + length; i += 1) value = value * 256 + buf[i]
@@ -230,10 +232,16 @@ export class TarParser {
         const magic = block.toString('ascii', 257, 262)
         if (magic === 'ustar' && prefix) name = `${prefix}/${name}`
         const size = readOctal(block, 124, 12)
+        if (!Number.isSafeInteger(size) || size < 0) {
+          throw new Error(`tar 头里的长度不合法：${size}`)
+        }
         const mtime = readOctal(block, 136, 12) * 1000
         const mode = readOctal(block, 100, 8)
         const type = String.fromCharCode(block[156] || 0x30)
         if (type === 'x' || type === 'g') {
+          if (size > MAX_META_BLOCK) {
+            throw new Error(`tar 元数据块过大：${size} 字节（上限 ${MAX_META_BLOCK}）`)
+          }
           this.paxSize = size
           this.paxBuf = Buffer.alloc(0)
           this.state = 'pax'
@@ -241,6 +249,9 @@ export class TarParser {
         }
         if (type === 'L') {
           // GNU long name: next block(s) hold the name
+          if (size > MAX_META_BLOCK) {
+            throw new Error(`tar 长名块过大：${size} 字节（上限 ${MAX_META_BLOCK}）`)
+          }
           this.state = 'gnu'
           this.remaining = size
           this.pad = 0
@@ -265,11 +276,21 @@ export class TarParser {
         }
         const pax = this.pax ?? {}
         this.pax = null
+        let entrySize = size
+        if (pax.size !== undefined) {
+          entrySize = Number(pax.size)
+          // 以前这里原样信任 pax 里的 size：`abc` 会变成 NaN（后面按 0 处理、流却对不上），
+          // `1e30` 这种会让解析器一直等下去。
+          if (!Number.isSafeInteger(entrySize) || entrySize < 0) {
+            throw new Error(`pax 里的长度不合法：${pax.size}`)
+          }
+        }
         const rel = pax.path || name
+        const paxMtime = pax.mtime === undefined ? null : Number(pax.mtime)
         const meta = {
           rel,
-          size: pax.size ? Number(pax.size) : size,
-          mtime: pax.mtime ? Math.round(Number(pax.mtime) * 1000) : mtime,
+          size: entrySize,
+          mtime: Number.isFinite(paxMtime) ? Math.round(paxMtime * 1000) : mtime,
           mode,
           type: 'file',
           pax,
