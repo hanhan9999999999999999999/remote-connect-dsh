@@ -37,6 +37,7 @@ const suites = [
   'peer-streams.mjs',
   'config.mjs',
   'sync-cancel.mjs',
+  'forget-cancel.mjs',
   'sync-progress.mjs',
   'diagnostics.mjs',
   'http-status.mjs',

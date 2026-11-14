@@ -2,6 +2,22 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.44 — 2026-11-15
+
+### 修复
+
+- **删掉一台正在同步的设备，任务会永远停在「准备中」**：`disconnect()` / `forget()` 只清 `clients` 和 `peers.json`，没管那台设备名下正在跑的任务——设备已经从列表里消失，任务却还挂在任务表里转圈，用户也没有地方点取消。现在两者都会把它名下的任务统一走**取消**路径（`cancelled`，不是 `failed`），并掐断连接。
+- **对端已经摘掉之后，取消按钮形同虚设**：`cancelTask()` 原来只从 `this.clients` 找 peer 来 abort，找不到就什么都不做，任务于是停在 `cancelling` 再也不动。现在任务在 `#runSync` 里自己留了一根 `abortNow` 线，`clients` 里没有它也能掐断。
+- `LinkService` 的 `peerStore` 现在可以像 `store` 一样注入（`new LinkService({ store, peerStore, logger })`），测试才能确认到底写进了哪个文件。
+
+### 新增
+
+- `test/forget-cancel.mjs`（4 项断言）：删除设备时任务变 `cancelled` 且记录消失、断开设备时任务取消但记录留着（会话字段清空、密码保留）、对端已从 `clients` 摘除时取消仍然生效、已完成的任务不会被「删除设备」改写成取消。
+
+### 内部
+
+- `TaskTable.recent()` 返回的是**视图拷贝**（改它不影响任务），内部要用任务本身时走新的 `TaskTable.listRefs()`。这是上面那条取消逻辑第一版失效的原因——它改的是一堆拷贝。
+
 ## 1.0.43 — 2026-11-15
 
 ### 修复

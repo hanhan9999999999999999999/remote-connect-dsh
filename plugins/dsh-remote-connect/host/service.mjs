@@ -19,10 +19,11 @@ import { installPluginDeps, scanPluginDeps } from './deps.mjs'
 import { TaskTable, newTask, taskView } from './tasks.mjs'
 
 export class LinkService {
-  constructor({ logger, store } = {}) {
+  constructor({ logger, store, peerStore } = {}) {
     this.logger = logger ?? new Logger({ file: path.join(dataHome(), 'remote-connect.log') })
     this.store = store ?? new ConfigStore()
-    this.peerStore = new PeerStore()
+    // 和 store 一样允许注入：测试要能看清到底写进了哪个文件
+    this.peerStore = peerStore ?? new PeerStore()
     this.server = null
     this.localApplier = null
     this.packCache = null
@@ -288,6 +289,7 @@ export class LinkService {
   }
 
   async disconnect(id) {
+    this.#cancelTasksOf(id, '已断开')
     const peer = this.clients.get(id)
     if (peer) {
       await peer.disconnect()
@@ -298,6 +300,7 @@ export class LinkService {
   }
 
   async forget(id) {
+    this.#cancelTasksOf(id, '已删除')
     const peer = this.clients.get(id)
     if (peer) {
       await peer.disconnect().catch(() => {})
@@ -427,6 +430,15 @@ export class LinkService {
   async #runSync(task, { cats, includeSecrets }) {
     const cfg = await this.store.get()
     const peer = await this.ensureConnected(task.peerId)
+    // 掐断这个任务的那条连接。任务一旦脱离 clients（对端被断开/删除），
+    // 取消就找不到 peer 了，只能靠这里留下的一根线，否则任务会永远挂在「取消中」。
+    task.abortNow = () => {
+      try {
+        peer.abort?.()
+      } catch {
+        /* 对端已经没了也算掐断成功 */
+      }
+    }
     task.phase = 'starting'
     // 两个方向的进度字段不一样：推送的对端把字节数放在 `remote.*` 里，
     // 拉取则由本地 applier 平铺在顶层。两种都认，否则拉取方向永远显示 0 字节、没有当前文件。
@@ -496,12 +508,36 @@ export class LinkService {
     t.phase = 'cancelling'
     const peer = this.clients.get(t.peerId)
     try {
-      peer?.abort?.()
+      // 对端可能已经从 clients 里摘掉了（断开 / 删除设备），那时只能靠任务自己留的那根线
+      if (peer) peer.abort?.()
+      else t.abortNow?.()
     } catch {
       /* 对端已经断开也算取消成功 */
     }
     this.logger.info('sync', `请求取消同步 ${t.id}`)
     return taskView(t)
+  }
+
+  /**
+   * 断开或删除一台设备时，它正在跑的同步不能继续：既不踏实，也会让任务一直挂在「准备中」。
+   * 这里把它名下的任务统一走取消路径（取消优先于失败），并掐断连接。
+   */
+  #cancelTasksOf(peerId, why) {
+    // 注意用 listRefs()：recent() 返回的是视图拷贝，改它不会影响任务
+    for (const task of this.tasks.listRefs()) {
+      if (task.peerId !== peerId) continue
+      if (task.finishedAt || task.phase === 'done' || task.phase === 'failed' || task.phase === 'cancelled') continue
+      if (!task.cancelRequested) {
+        task.cancelRequested = true
+        task.phase = 'cancelling'
+      }
+      try {
+        task.abortNow?.()
+      } catch {
+        /* 已经没了就算了 */
+      }
+      this.logger.info('sync', `同步已取消（${why}）：${task.direction} ${peerId}`)
+    }
   }
 
   /* ---------------------------------------------------------------- */

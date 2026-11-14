@@ -205,6 +205,7 @@
 | 对端一直往外吐内容 | 单个 JSON 响应上限 64 MB（`peer.maxJsonBytes`），超了立刻 `res.destroy()` 并报 `BAD_RESPONSE`「对端返回的内容超过 N MB，已中止」——`/syncs` 这类接口要是回一份坏数据，不能让它把内存吃光 |
 | 连上来却什么都不发 | `requestTimeout = 0` 是故意的（大包要传很久，不能按总时长掐），换来的是**空闲超时**：连接上 `idleMs`（默认 120 秒）没有任何数据往来就 `socket.destroy()` 并记一条 warn。同步期间一直有数据在走，不会被误杀（`test/server-limits.mjs`） |
 | 连接数被灌满 | `maxConnections`（默认 128）——这是个给对面一两个人连的 P2P 服务，正常人只开几条；到上限时多出来的连接直接被拒，并记一条 warn 带对端地址，而不是让端口把文件句柄耗光（`test/server-limits.mjs`） |
+| 同步途中断开或删掉那台设备 | 它名下的任务统一走取消（`cancelled`，不是 `failed`）并掐断连接，否则任务会一直停在「准备中」——设备都已经不在列表里了，用户也没地方点取消。任务对象在 `#runSync` 里留了一根 `abortNow` 线：即使对端已从 `clients` 里摘掉，取消照样能生效（`test/forget-cancel.mjs`） |
 
 ## 7. 兼容性
 

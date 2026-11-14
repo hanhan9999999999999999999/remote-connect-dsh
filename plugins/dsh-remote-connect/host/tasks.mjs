@@ -81,9 +81,14 @@ export class TaskTable {
     return t ? taskView(t) : null
   }
 
-  /** 最近 n 条（按插入顺序，最新在后）。 */
+  /** 最近 n 条（按插入顺序，最新在后）。返回的是视图拷贝——改它不会影响任务。 */
   recent(n = 10) {
     return [...this.map.values()].slice(-n).map(taskView)
+  }
+
+  /** 任务对象本身（内部用）。视图是拷贝，要改状态必须拿到原对象。 */
+  listRefs() {
+    return [...this.map.values()]
   }
 
   #trim() {
