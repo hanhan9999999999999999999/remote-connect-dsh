@@ -219,6 +219,7 @@
 | 一个读不了的子目录拖垮整次扫描 | walk() 以前把 opendir 的错（权限不足、被别的程序锁住、路径过长）原样抛出去——用户看到的是整个分类「扫描失败」。现在这类错只记一笔「读不了（权限不足）」（code: denied），继续扫别的目录；stat 失败、迭代途中目录被删也一样记一笔而不是静默跳过。目录递归另加 MAX_DEPTH = 64 的深度上限，超了就整支算作「目录层级太深」（code: deep）。两者都进 excludedTotal/excludedReasons 与可展开的明细，界面那句话也从「已按规则跳过」改成「有 N 个文件没进清单」（`test/inventory-read-errors.mjs`） |
 | 对端在握手应答里乱写 | 握手应答（`/hello` 回的 `salt`、`serverNonce`、`kdf`）是**对端说的**，本机以前照着算：少一个字段就是 `Buffer.from(undefined)` 的 TypeError，`kdf.N` 报个十亿就让本机去申请一个不存在的体积。现在先收一遍——`salt`/`serverNonce` 必须是 16–64 字节的 base64，`kdf` 必须是对象、`N` 是 16384–1048576 之间的 2 的幂、`r`≤32、`p`≤16，且 `128*N*r` 不超过 512 MB，`keylen` 一律按 32 走；不合法就 `BAD_RESPONSE` 说清哪个字段不对（`test/handshake-guard.mjs`） |
 | 没带令牌就发 POST | 先把令牌本身查一遍（有没有、过没过期），再决定要不要读 body。以前是先读 body 再验身份，128 条连接 × 4 MB 上限就是半个 GB 的内存，谁都能凑出来（`test/server-auth.mjs`） |
+| 一轮局域网探测被灌满 / 被拖住 / 关掉之后再也不会恢复 | `scan()` 的等待时间、目标列表、收多少台都没有上限：`timeoutMs` 直接进 `setTimeout`（`NaN` 会变成 1 ms，扫描立刻返回空表）、`extraHosts` 原样并进广播目标（可以传一万个地址）、收到的回复也不封顶（同网段谁都能往这个端口灌，一台机器 1.5 秒能塞进几十万条）。现在 `scanWindow()` 把等待收进 200–15000 ms，`sanitizeTargets()` 只认 IPv4 字面量、去重并封顶 64 个，收满 `maxPeers`（256）之后多出来的回复直接丢掉并记一条警告；第二轮补发（450 ms）在扫描提前结束时会被清掉，不再往已关闭的 socket 上发。另外 `start()` 以前在 UDP 套接字意外关闭后仍把 `this.socket` 留着，端口被别的程序抢走之后就永远「已经在跑」、再也不监听——现在 `close` 会把 `this.socket` 放开、记一条 warn，下一次 `start()` 能真的重新绑上（`test/discovery-limits.mjs`） |
 
 ## 7. 兼容性
 

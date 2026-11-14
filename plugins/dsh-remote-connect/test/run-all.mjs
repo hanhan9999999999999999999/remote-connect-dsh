@@ -35,6 +35,7 @@ const suites = [
   'tar-hostile.mjs',
   'tar-write.mjs',
   'discovery.mjs',
+  'discovery-limits.mjs',
   'pack.mjs',
   'push-guard.mjs',
   'frames.mjs',
