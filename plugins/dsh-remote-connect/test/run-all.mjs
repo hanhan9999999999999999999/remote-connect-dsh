@@ -57,6 +57,7 @@ const suites = [
   'config.mjs',
   'sync-cancel.mjs',
   'sync-concurrency.mjs',
+  'client-busy.mjs',
   'forget-cancel.mjs',
   'disconnect-hardening.mjs',
   'sync-progress.mjs',

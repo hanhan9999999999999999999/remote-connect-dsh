@@ -146,6 +146,7 @@ window.__ModuleLoader__.load({
       'sync.pollStale': '已经连续 {n} 次问不到任务状态，界面上的进度可能停住了（连接或服务端可能有问题）',
       'sync.resultLine': '本次同步 {files} 个文件 · {size}',
       'sync.failed': '同步失败',
+      'sync.busy': '已经有一条同步在跑，等它结束或者取消再开始',
       'sync.recent': '本机接收记录',
       'sync.noRecent': '还没有接收记录',
       'sync.rollback': '回滚',
@@ -327,6 +328,7 @@ window.__ModuleLoader__.load({
       'sync.pollStale': 'Could not read the task status {n} time(s) in a row — the progress shown here may be frozen',
       'sync.resultLine': 'Synced {files} file(s) · {size}',
       'sync.failed': 'Sync failed',
+      'sync.busy': 'A sync is already running — wait for it to finish or cancel it first',
       'sync.recent': 'Received on this machine',
       'sync.noRecent': 'Nothing received yet',
       'sync.rollback': 'Roll back',
@@ -1378,11 +1380,26 @@ window.__ModuleLoader__.load({
           const created = await api('/sync', 'POST', { peerId, direction, cats: selectedCats })
           setTask(created)
         } catch (e) {
-          notify(e.message, 'error')
+          // 已经有一条在跑：把状态读回来，让那条任务自己出现在进度条上，
+          // 顺手把「开始」按到不可点——否则用户会反复点，每次只拿到一句拒绝。
+          if (e.code === 'SYNC_BUSY') {
+            notify(t('sync.busy'), 'warn')
+            await reload(true)
+          } else {
+            notify(e.message, 'error')
+          }
         } finally {
           setStarting(false)
         }
       }
+
+      // 换标签页、刷新页面之后，本地状态里没有那条正在跑的任务：
+      // 进度条消失、开始按钮又能点（点下去只会被拒）。这里把它接回来。
+      useEffect(() => {
+        if (task) return
+        const running = (status.tasks || []).find((x) => x && !x.finishedAt)
+        if (running) setTask(running)
+      }, [status.tasks, task])
 
       useEffect(() => {
         if (!task || task.phase === 'done' || task.phase === 'failed' || task.phase === 'cancelled') return undefined
