@@ -582,6 +582,11 @@ export class LinkServer {
       totalFiles: inv.totalFiles,
       totalBytes: inv.totalBytes,
       excluded: inv.excluded,
+      // 扫描时按规则跳过了多少、各是什么原因：`scanAll()` 早就算好了，
+      // 可这里以前只挑固定几个字段回给对端，于是界面那句「有 N 个文件没进清单」
+      // 在对端看永远是 0（自己扫自己时才正常）。
+      excludedTotal: inv.excludedTotal ?? inv.excluded?.length ?? 0,
+      excludedReasons: inv.excludedReasons ?? {},
       entries: inv.entries.map((e) => ({
         cat: e.cat,
         rel: e.rel,

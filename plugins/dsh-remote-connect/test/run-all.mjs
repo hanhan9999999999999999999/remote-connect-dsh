@@ -19,6 +19,7 @@ const suites = [
   'inventory-guard.mjs',
   'inventory-secrets.mjs',
   'inventory-excluded.mjs',
+  'inventory-wire.mjs',
   'inventory-read-errors.mjs',
   'deps.mjs',
   'bridge-dir.mjs',
