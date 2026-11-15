@@ -1,12 +1,12 @@
 {
   "format": 1,
   "title": {
-    "zh": "远程互联",
-    "en": "Remote Connect"
+    "zh": "远程互联 · 看世界",
+    "en": "Remote Connect & See World"
   },
   "description": {
-    "zh": "手机浏览器操作电脑上的 DSH，以及两台电脑之间同步插件、技能、规则、配置与会话。",
-    "en": "Drive DSH on your computer from a phone browser, and sync plugins, skills, rules, config and sessions between two computers."
+    "zh": "手机浏览器操作电脑上的 DSH、两台电脑之间同步插件与配置；另外还有一只装在 DSH 里的眼睛——用摄像头看世界，把画面交给模型。",
+    "en": "Drive DSH on your computer from a phone browser and sync plugins between machines; plus an eye for DSH: a webcam the model can actually look through."
   },
   "metadata": {
     "categories": {
@@ -14,6 +14,12 @@
         "title": {
           "zh": "互联",
           "en": "Connectivity"
+        }
+      },
+      "vision": {
+        "title": {
+          "zh": "视觉",
+          "en": "Vision"
         }
       }
     },
@@ -28,6 +34,24 @@
         "title": {
           "zh": "手机",
           "en": "Phone"
+        }
+      },
+      "camera": {
+        "title": {
+          "zh": "摄像头",
+          "en": "Camera"
+        }
+      },
+      "vision": {
+        "title": {
+          "zh": "看图",
+          "en": "Vision"
+        }
+      },
+      "local": {
+        "title": {
+          "zh": "本地硬件",
+          "en": "Local device"
         }
       }
     },
@@ -73,6 +97,55 @@
             "url": "https://github.com/hanhan9999999999999999999/remote-connect-dsh.git",
             "commit": "996696bb648799ff795b0c65790a2fe90cc0db3d",
             "path": "plugins/dsh-remote-connect"
+          },
+          "engines": {
+            "dsh": ">=0.1.0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "dsh-see-world",
+      "title": {
+        "zh": "看世界",
+        "en": "See World"
+      },
+      "description": {
+        "zh": "给 DSH 装一只摄像头：可以看一眼（多帧拼版、自动压暗过曝）、盯一段（画面变了就自动把消息投进当前会话）、也能把画面直接发进对话。面板可拖动、不挡其他界面。",
+        "en": "Give DSH a webcam: take a look (multi-frame sheet, auto-exposure), watch for a while (replies into the current conversation when something changes), or send a frame into the chat. Draggable panel that does not block the UI."
+      },
+      "author": "茄茄子",
+      "homepage": "https://github.com/hanhan9999999999999999999/remote-connect-dsh/tree/main/plugins/dsh-see-world",
+      "repository": {
+        "url": "https://github.com/hanhan9999999999999999999/remote-connect-dsh"
+      },
+      "metadata": {
+        "category": "vision",
+        "keywords": [
+          "camera",
+          "webcam",
+          "vision",
+          "snapshot",
+          "vision-model",
+          "mcp",
+          "tool"
+        ],
+        "labels": [
+          "camera",
+          "vision",
+          "local"
+        ],
+        "sortKeys": {}
+      },
+      "versions": [
+        {
+          "version": "0.3.2",
+          "publishTimestamp": 1794737710,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/hanhan9999999999999999999/remote-connect-dsh.git",
+            "commit": "0000000000000000000000000000000000000000",
+            "path": "plugins/dsh-see-world"
           },
           "engines": {
             "dsh": ">=0.1.0"

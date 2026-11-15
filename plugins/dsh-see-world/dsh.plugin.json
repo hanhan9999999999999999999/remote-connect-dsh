@@ -1,0 +1,13 @@
+{
+  "name": "dsh-see-world",
+  "description": "Let DSH see the world through a camera: score frames by how much the picture changed, keep only the ones that matter, pack them into one sheet, and wake the model when something actually happens.",
+  "version": "0.1.0",
+  "entry": {
+    "name": "dsh-see-world",
+    "inject": [
+      "tools",
+      "attachments",
+      "sessionController"
+    ]
+  }
+}
