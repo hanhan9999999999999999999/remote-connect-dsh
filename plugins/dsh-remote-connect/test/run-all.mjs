@@ -13,6 +13,7 @@ const suites = [
   'client-host.mjs',
   'logger.mjs',
   'tasks.mjs',
+  'tasks-trim.mjs',
   'task-fields.mjs',
   'ui-feedback.mjs',
   'port-scan.mjs',

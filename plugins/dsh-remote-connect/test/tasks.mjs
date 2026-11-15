@@ -58,12 +58,13 @@ await expect('未知 id 返回 null 而不是抛错', () => {
   assert.equal(table.view('t_nope'), null)
 })
 
-await expect(`超过 ${MAX_TASKS} 条时淘汰最老的`, () => {
+await expect(`超过 ${MAX_TASKS} 条时淘汰最老的（只淘汰已结束的）`, () => {
   const table = new TaskTable()
   const ids = []
   for (let i = 0; i < MAX_TASKS + 5; i += 1) {
     const t = newTask({ peerId: `p${i}` })
     t.startedAt = 1000 + i
+    t.finishedAt = t.startedAt + 5
     ids.push(table.add(t).id)
   }
   assert.equal(table.size, MAX_TASKS)
@@ -76,10 +77,12 @@ await expect('淘汰看 startedAt，不看插入顺序', () => {
   const recent = [10, 11, 12].map((i) => {
     const t = newTask({ peerId: `r${i}` })
     t.startedAt = i
+    t.finishedAt = i + 1
     return table.add(t)
   })
   const stale = newTask({ peerId: 'delayed' })
   stale.startedAt = 1 // 最后才插进来，但时间最早
+  stale.finishedAt = 2
   table.add(stale)
   assert.equal(table.get(stale.id), null, '时间最早的那条要被淘汰')
   assert.equal(table.size, 3)

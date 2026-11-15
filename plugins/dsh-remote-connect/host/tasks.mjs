@@ -91,10 +91,22 @@ export class TaskTable {
     return [...this.map.values()]
   }
 
+  /**
+   * 淘汰：只淘汰**已经结束**的任务，按开始时间从早到晚。
+   *
+   * 表有上限是为了「长期运行不无限长大」，不是为了让正在跑的那条从面板上消失——
+   * 一旦把在跑的丢了，`/task/status` 查不到它、取消也点不到，用户只能等它自己结束
+   * （或者重启）。所以全都在跑的时候宁可暂时超上限，也不丢。
+   */
   #trim() {
-    if (this.map.size <= this.max) return
-    let oldest = null
-    for (const t of this.map.values()) if (!oldest || t.startedAt < oldest.startedAt) oldest = t
-    if (oldest) this.map.delete(oldest.id)
+    while (this.map.size > this.max) {
+      let oldest = null
+      for (const t of this.map.values()) {
+        if (!t.finishedAt) continue
+        if (!oldest || t.startedAt < oldest.startedAt) oldest = t
+      }
+      if (!oldest) return
+      this.map.delete(oldest.id)
+    }
   }
 }

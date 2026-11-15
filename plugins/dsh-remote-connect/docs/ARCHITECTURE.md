@@ -208,6 +208,7 @@
 | 对端一直往外吐内容 | 单个 JSON 响应上限 64 MB（`peer.maxJsonBytes`），超了立刻 `res.destroy()` 并报 `BAD_RESPONSE`「对端返回的内容超过 N MB，已中止」——`/syncs` 这类接口要是回一份坏数据，不能让它把内存吃光 |
 | 连上来却什么都不发 | `requestTimeout = 0` 是故意的（大包要传很久，不能按总时长掐），换来的是**空闲超时**：连接上 `idleMs`（默认 120 秒）没有任何数据往来就 `socket.destroy()` 并记一条 warn。同步期间一直有数据在走，不会被误杀（`test/server-limits.mjs`） |
 | 连接数被灌满 | `maxConnections`（默认 128）——这是个给对面一两个人连的 P2P 服务，正常人只开几条；到上限时多出来的连接直接被拒，并记一条 warn 带对端地址，而不是让端口把文件句柄耗光（`test/server-limits.mjs`） |
+| 任务表淘汰时把正在跑的那条也丢了 | 表有上限（`MAX_TASKS = 40`）是为了长期运行不无限长大，但以前按 `startedAt` 淘汰时不分死活：40 条都还在跑的时候再加一条，最老的那条正在跑的任务就从表里消失——`/task/status` 查不到它（面板一直空转）、取消也点不到（`cancelTask` 找不到它），用户只能等它自己结束或重启。现在只淘汰已经结束的，全都在跑时宁可暂时超上限（`test/tasks-trim.mjs`） |
 | 同步途中断开或删掉那台设备 | 它名下的任务统一走取消（`cancelled`，不是 `failed`）并掐断连接，否则任务会一直停在「准备中」——设备都已经不在列表里了，用户也没地方点取消。任务对象在 `#runSync` 里留了一根 `abortNow` 线：即使对端已从 `clients` 里摘掉，取消照样能生效（`test/forget-cancel.mjs`） |
 | 批次编号或备份路径越界 | 批次编号会拼进 `<data>/syncs/<id>`，而它是从对端请求里来的（`/rollback`、`/progress` 都带着它），所以先按 `^[A-Za-z0-9_-]{1,64}$` 校验，不合规报 `BAD_INPUT`；`journal` 里记的备份路径同样当不可信输入，出了数据目录就按「备份没了」处理（算 `missing`），不去复制别处的文件（`test/rollback.mjs`） |
 | 端口记录与实际不一致 | 手机通道的端口被占后会自动顺延，但 `runtime/port.json` 有可能没写进去（目录只读、磁盘满）：桥接在 8900 跑着、记录还指 8899。顺延成功却没写成时返回 `portWriteFailed` + 一句 `warning`；`status` 在记录那个端口问不到服务时，会去监听表里认「命令行像 `server.mjs` 的那个进程」，认出来就报真实端口并标 `portMismatch`，认不出来才报未运行——不假装有服务，也不假装没服务（`test/phone-port-sync.mjs`） |
