@@ -43,6 +43,7 @@ window.__ModuleLoader__.load({
       'common.copy': '复制',
       'common.copied': '已复制',
       'common.copyFailed': '复制失败，请手动选中',
+    'status.degraded': '有 {n} 块信息没取到，下面几处暂时不准：',
       'common.confirm': '确认？',
       'common.cancel': '取消',
       'common.refresh': '刷新',
@@ -220,6 +221,7 @@ window.__ModuleLoader__.load({
       'common.copy': 'Copy',
       'common.copied': 'Copied',
       'common.copyFailed': 'Copy failed — select it manually',
+    'status.degraded': '{n} part(s) could not be read — these may be wrong for now:',
       'common.confirm': 'Confirm?',
       'common.cancel': 'Cancel',
       'common.refresh': 'Refresh',
@@ -442,6 +444,8 @@ window.__ModuleLoader__.load({
 .dlk-group{display:flex;flex-direction:column;gap:8px;min-width:0}
 .dlk-divide{height:1px;background:var(--dsw-alias-border-l2);margin:2px 0}
 .dlk-empty{padding:16px;border:1px dashed var(--dsw-alias-border-l2);border-radius:10px;text-align:center;color:var(--dsw-alias-label-tertiary);font-size:12px}
+.dlk-degraded{margin:0 0 12px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l2);border-left:3px solid var(--dsw-alias-label-warning,#c98a00);border-radius:8px;font-size:12px;color:var(--dsw-alias-label-secondary)}
+.dlk-degraded ul{margin:6px 0 0;padding-left:18px;color:var(--dsw-alias-label-tertiary)}
 .dlk-bar{height:6px;border-radius:999px;background:var(--dsw-alias-border-l2);overflow:hidden}
 .dlk-bar>i{display:block;height:100%;background:var(--dsw-alias-label-primary);transition:width .3s ease}
 .dlk-toast{position:sticky;bottom:0;align-self:flex-start;padding:6px 11px;border-radius:8px;font-size:12px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);box-shadow:0 4px 16px rgba(0,0,0,.12)}
@@ -829,6 +833,20 @@ window.__ModuleLoader__.load({
               ),
             ),
           ),
+          status && Array.isArray(status.degraded) && status.degraded.length > 0
+            ? h(
+                'div',
+                { className: 'dlk-degraded', role: 'alert' },
+                t('status.degraded').replace('{n}', String(status.degraded.length)),
+                h(
+                  'ul',
+                  null,
+                  status.degraded.map((d) =>
+                    h('li', { key: d.section }, d.section + '：' + (d.error || d.code || '')),
+                  ),
+                ),
+              )
+            : null,
           !status && !loadError
             ? h('div', { className: 'dlk-empty', role: 'status' }, h(Spinner), ' ', t('common.loading'))
             : loadError && !status

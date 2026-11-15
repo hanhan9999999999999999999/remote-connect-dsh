@@ -31,6 +31,7 @@ const suites = [
   'rollback.mjs',
   'apply-discard.mjs',
   'local-syncs.mjs',
+  'status-degraded.mjs',
   'apply-guard.mjs',
   'pack-safety.mjs',
   'tar-hostile.mjs',

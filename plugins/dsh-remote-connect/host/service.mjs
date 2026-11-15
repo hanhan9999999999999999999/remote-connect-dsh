@@ -147,17 +147,60 @@ export class LinkService {
   }
 
   async status() {
-    await this.init()
-    const cfg = await this.store.get()
-    const server = this.server ? await this.server.status() : { running: false }
+    /**
+     * 面板每几秒取一次这个快照。以前任何一块出错（配置读不出来、网卡枚举失败、
+     * peers.json 坏了）都会让整份快照变成 500 —— 界面一片空白，用户连「哪里坏了」
+     * 都看不到，更没法去修。现在每一块单独兜住，坏的那块降级成空值并在 degraded
+     * 里留下原因，其余照常显示。
+     */
+    const degraded = []
+    const safe = async (name, fn, fallback) => {
+      try {
+        return await fn()
+      } catch (err) {
+        const reason = String(err?.message ?? err).slice(0, 200)
+        degraded.push({ section: name, code: err?.code ?? 'ERROR', error: reason })
+        try {
+          this.logger?.warn?.('service', `状态快照的这一块取不到（${name}）：${reason}`)
+        } catch {}
+        return fallback
+      }
+    }
+
+    const app = { version: VERSION, dataHome: dataHome(), dshHome: dshHome() }
+    let initError = null
+    try {
+      await this.init()
+    } catch (err) {
+      initError = { code: err?.code ?? 'ERROR', error: String(err?.message ?? err).slice(0, 200) }
+    }
+    if (initError) {
+      degraded.push({ section: 'init', ...initError })
+      return {
+        app,
+        device: {},
+        server: { running: false },
+        config: emptyPublicConfig(),
+        peers: [],
+        peers: [],
+        recent: [],
+        tasks: [],
+        degraded,
+      }
+    }
+
+    const cfg = await safe('config', () => this.store.get(), { device: {} })
     return {
-      app: { version: VERSION, dataHome: dataHome(), dshHome: dshHome() },
-      device: { ...cfg.device },
-      server,
-      config: await this.publicConfig(),
-      peers: await this.peerStore.list(),
-      recent: await this.localApplier.listRecent(8).catch(() => []),
-      tasks: this.tasks.recent(10),
+      app,
+      device: { ...(cfg.device ?? {}) },
+      server: await safe('server', async () => (this.server ? await this.server.status() : { running: false }), {
+        running: false,
+      }),
+      config: await safe('config', () => this.publicConfig(), emptyPublicConfig()),
+      peers: await safe('peers', () => this.peerStore.list(), []),
+      recent: await safe('recent', () => this.localApplier.listRecent(8), []),
+      tasks: await safe('tasks', async () => this.tasks.recent(10), []),
+      degraded,
     }
   }
 
@@ -613,6 +656,23 @@ export class LinkService {
 
   async logs(limit = 200) {
     return this.logger.list(limit)
+  }
+}
+
+
+/**
+ * 配置读不出来时给面板用的空壳：形状跟 `publicConfig()` 一致，
+ * 这样界面不用每处都写 `?.`，也不会因为少一层就白屏。
+ */
+function emptyPublicConfig() {
+  return {
+    device: { name: '', id: '' },
+    server: { addresses: [] },
+    auth: { hasPassword: false, password: '', changedAt: 0 },
+    sync: { categories: {} },
+    ui: {},
+    connectUri: null,
+    categories: [],
   }
 }
 
