@@ -302,8 +302,20 @@ export class RemotePeer {
   }
 
   async requestJson(method, path, { payload, encrypt = true, timeoutMs = 60_000 } = {}) {
-    const plain = payload === undefined ? null : Buffer.from(JSON.stringify(payload), 'utf8')
-    const body = plain && encrypt ? Buffer.from(JSON.stringify(encryptJson(this.session.sk, payload)), 'utf8') : plain
+    // 先确认手里有会话：加密那一步要用 session.sk，没有会话时它会抛一个 TypeError，
+    // 一路冒到路由层就变成 500「服务端坏了」，而真实原因是「还没连上」。
+    if (!this.session) throw new AppError('NOT_CONNECTED', '尚未连接对端')
+    let plain = null
+    let body = null
+    if (payload !== undefined) {
+      try {
+        plain = Buffer.from(JSON.stringify(payload), 'utf8')
+        body = encrypt ? Buffer.from(JSON.stringify(encryptJson(this.session.sk, payload)), 'utf8') : plain
+      } catch (err) {
+        // 循环引用、BigInt 这类内容没法变成 JSON：是我们递进来的东西不对，不是对端的问题。
+        throw new AppError('BAD_INPUT', `请求内容没法序列化：${err?.message ?? err}`)
+      }
+    }
     const headers = this.#signedHeaders(method, path, body, {
       ...(body ? { 'content-type': 'application/json', 'content-length': String(body.length) } : {}),
     })

@@ -204,6 +204,7 @@
 | 应用中断 | 只有正常收尾才写 `journal.json`；只写到一半的批次在 `local/syncs` 里标成 incomplete，回滚时退回 `journal.jsonl`（结果带 `partial: true`），临时文件会在失败收尾时清掉 |
 | 磁盘不足 | `/diagnostics` 的 `disk` 项报 **DSH 数据目录所在那块盘**的可用空间（< 2 GB 标 warn），只提示、不阻断同步；看的是同步真正写入的盘，不是用户主目录 |
 | 流中途失败 | 落地失败（路径越界、哈希不符、超限）或推送被对端提前拒（413/401）时，那条 `res` / `source` 会被 `destroy` 掉——否则对端还在往外传、本地还在把文件读完，socket 一直挂在 agent 池里。解码与解压这两环统一走 `frames.mjs` 的 `decodeFrames()`（收、发两侧共用）；发送侧打包用 `pipeline()` 而不是 `.pipe()`，源文件在打包途中消失会变成一个正常的失败，而不是未捕获异常把进程带走（`test/peer-streams.mjs`、`test/frames.mjs`、`test/pack.mjs`） |
+| 没连上就发带体的请求 | `requestJson()` 要用会话密钥加密请求体，可它以前不检查有没有会话：带请求体的路径（`/inventory`、`/rollback`、`/export/prepare`、`/bye`）在没连上时直接 `this.session.sk` 抛 TypeError，冒到路由层就是 500「服务端坏了」，真实原因却是「还没连上」。现在先确认会话、再序列化；内容本身没法变成 JSON（循环引用、BigInt）时报 `BAD_INPUT` 并一个字节都不发（`test/peer-guard.mjs`） |
 | 对端半死不活（发完响应头就不动） | 请求侧只负责拿到响应头，读内容在 `#jsonFrom()`：那里盯着 socket 超时的标记，读 body 阶段被掐断报 `TIMEOUT`「对端迟迟没有把内容发完」；半路真断开报 `NETWORK`。以前这两种都会变成裸 `ECONNRESET / aborted`，到路由层认不出错误码就成了 500「服务端坏了」（`test/peer-body.mjs`） |
 | 对端一直往外吐内容 | 单个 JSON 响应上限 64 MB（`peer.maxJsonBytes`），超了立刻 `res.destroy()` 并报 `BAD_RESPONSE`「对端返回的内容超过 N MB，已中止」——`/syncs` 这类接口要是回一份坏数据，不能让它把内存吃光 |
 | 连上来却什么都不发 | `requestTimeout = 0` 是故意的（大包要传很久，不能按总时长掐），换来的是**空闲超时**：连接上 `idleMs`（默认 120 秒）没有任何数据往来就 `socket.destroy()` 并记一条 warn。同步期间一直有数据在走，不会被误杀（`test/server-limits.mjs`） |

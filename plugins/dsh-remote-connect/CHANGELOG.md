@@ -2,6 +2,17 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.75 — 2026-11-15
+
+### 修复
+
+- **没连上就发带请求体的请求，报的是「服务端坏了」**：`requestJson()` 要用会话密钥加密请求体，但它以前不检查有没有会话。不带请求体的 GET（例如 `/ping`）会先被签名那一步拦下、报对 `NOT_CONNECTED`；带请求体的那几条（`/inventory`、`/rollback`、`/export/prepare`、`/bye`）则直接 `this.session.sk` 抛 `TypeError: Cannot read properties of null`，冒到路由层就是 500。现在先确认会话再序列化。
+- **内容本身没法变成 JSON 时也是一样的 500**：payload 里有循环引用或 BigInt，`JSON.stringify` 抛 TypeError。现在报 400 `BAD_INPUT` 并说清「请求内容没法序列化」，而且一个字节都不会发出去。
+
+### 新增
+
+- `test/peer-guard.mjs`（4 项断言）：没有会话时 GET 报 `NOT_CONNECTED`；`probe()` 如实返回失败而不是崩；带请求体的 POST 在没会话时同样报 `NOT_CONNECTED`；循环引用报 `BAD_INPUT` 且假服务端一次请求都没收到。拿 `v1.0.74` 的 `host/peer.mjs` 跑同一个测试，后两项红（`Cannot read properties of null`、`Converting circular structure to JSON`）。
+
 ## 1.0.74 — 2026-11-15
 
 ### 修复

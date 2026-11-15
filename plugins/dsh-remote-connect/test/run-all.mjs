@@ -30,6 +30,7 @@ const suites = [
   'peer-session.mjs',
   'peer-reconnect.mjs',
   'peer-body.mjs',
+  'peer-guard.mjs',
   'handshake-guard.mjs',
   'server-limits.mjs',
   'handshake-flood.mjs',
