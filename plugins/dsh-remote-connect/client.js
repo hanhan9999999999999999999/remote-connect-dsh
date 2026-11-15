@@ -716,10 +716,19 @@ window.__ModuleLoader__.load({
     function useToast() {
       const [toast, setToast] = useState(null)
       const timer = useRef(null)
+      // 上一次已经念过的内容：内容没变就不再让读屏软件重念一遍
+      const spoken = useRef('')
       const notify = useCallback((message, tone) => {
-        setToast({ message, tone: tone || 'ok', id: Math.random() })
+        const text = String(message ?? '')
+        if (!text) return
+        const nextTone = tone || 'ok'
+        const signature = nextTone + '|' + text
+        const repeat = signature === spoken.current
+        spoken.current = signature
+        setToast({ message: text, tone: nextTone, id: Math.random(), repeat })
         clearTimeout(timer.current)
-        timer.current = setTimeout(() => setToast(null), 4200)
+        // 错误多留一会儿：它是唯一需要人动手处理的那类提示
+        timer.current = setTimeout(() => setToast(null), nextTone === 'error' ? 9000 : 4200)
       }, [])
       useEffect(() => () => clearTimeout(timer.current), [])
       return { toast, notify }
@@ -871,7 +880,20 @@ window.__ModuleLoader__.load({
                   tab === 'phone' ? h(PhonePage) : null,
                   tab === 'diagnostics' ? h(DiagnosticsPage) : null,
                 ),
-          toast ? h('div', { className: 'dlk-toast', 'data-tone': toast.tone, role: 'status', 'aria-live': 'polite' }, toast.message) : null,
+          toast
+            ? h(
+                'div',
+                {
+                  className: 'dlk-toast',
+                  'data-tone': toast.tone,
+                  role: 'status',
+                  // 同样的内容再念一遍只是噪音：连续两次同文（比如连点两下）时改成 off，
+                  // 对话框本身已经写着字，视觉上照样看得到。
+                  'aria-live': toast.repeat ? 'off' : toast.tone === 'error' ? 'assertive' : 'polite',
+                },
+                toast.message,
+              )
+            : null,
         ),
       )
     }

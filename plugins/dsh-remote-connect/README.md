@@ -11,7 +11,7 @@ DSH 插件：**手机浏览器操作电脑上的 DSH**，以及**两台电脑之
 https://raw.githubusercontent.com/hanhan9999999999999999999/remote-connect-dsh/main/index.json
 
 # 或者直接钉版本装
-pnpm add "git+https://github.com/hanhan9999999999999999999/remote-connect-dsh.git#v1.0.63&path:/plugins/dsh-remote-connect"
+pnpm add "git+https://github.com/hanhan9999999999999999999/remote-connect-dsh.git#v1.0.64&path:/plugins/dsh-remote-connect"
 
 # 或者拷到 profile 的 plugins 目录，再跑一次自带安装器
 node scripts/install.mjs --profile <profile 名>      # --dry-run 先看要写什么
