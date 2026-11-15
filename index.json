@@ -140,11 +140,11 @@
       "versions": [
         {
           "version": "0.3.2",
-          "publishTimestamp": 1794737710,
+          "publishTimestamp": 1794737736,
           "source": {
             "type": "git",
             "url": "https://github.com/hanhan9999999999999999999/remote-connect-dsh.git",
-            "commit": "0000000000000000000000000000000000000000",
+            "commit": "4cad76218a3619378bf98929ac94dfbf42bcf4cf",
             "path": "plugins/dsh-see-world"
           },
           "engines": {
