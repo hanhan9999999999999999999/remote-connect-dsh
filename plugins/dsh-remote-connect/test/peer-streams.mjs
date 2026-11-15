@@ -9,6 +9,8 @@
  */
 import assert from 'node:assert/strict'
 import http from 'node:http'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { Writable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { createGzip } from 'node:zlib'
@@ -16,7 +18,11 @@ import { createGzip } from 'node:zlib'
 process.env.DEVICE_LINK_HOME = process.env.TEMP ?? '/tmp'
 process.env.DEVICE_LINK_DSH_HOME = process.env.TEMP ?? '/tmp'
 
-const { RemotePeer } = await import('../host/peer.mjs')
+// 可传一个模块路径参数，用来验证这个守卫本身（拿旧版本跑应当会红）。
+const peerUrl = process.argv[2]
+  ? pathToFileURL(path.resolve(process.argv[2])).href
+  : new URL('../host/peer.mjs', import.meta.url).href
+const { RemotePeer } = await import(peerUrl)
 const { encodeFrame } = await import('../host/crypto.mjs')
 
 const KEY = Buffer.alloc(32, 1)
@@ -152,5 +158,61 @@ await ok('对端发来解不开的帧时，报错而不是崩进程', async () =
   }
 })
 
-console.log(`peer-streams ok · ${pass} 项断言 · 失败收流 / 成功收流 / 坏流不崩（${pass} 通过、${fail} 失败）`)
+/* 4. 本地打包失败（文件在半路不见了）→ 立刻报「读不到」，而不是挂到超时 */
+await ok('本地文件读不到时，推送立刻报错并让对方收掉批次', async () => {
+  const hits = { prepare: 0, put: 0, del: 0 }
+  const server = http.createServer((req, res) => {
+    if (req.url.endsWith('/apply/prepare')) {
+      hits.prepare += 1
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ syncId: 's1', maxTotalBytes: 1 << 30 }))
+      return
+    }
+    if (req.method === 'DELETE') {
+      hits.del += 1
+      req.resume()
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: true }))
+      return
+    }
+    if (req.method === 'PUT') {
+      // 故意不回话也不收尾：如果上传流没报错，这里就会一直挂着
+      hits.put += 1
+      req.resume()
+      return
+    }
+    res.writeHead(404)
+    res.end('{}')
+  })
+  await new Promise((r) => server.listen(0, '127.0.0.1', r))
+  const port = server.address().port
+  const peer = new RemotePeer({
+    record: { id: 'p2', host: '127.0.0.1', port, scheme: 'http', name: '假对端' },
+    logger: quiet,
+    device: { id: 'me', name: '本机', platform: 'win32', version: '1.0.0' },
+  })
+  peer.session = { token: 'tok', sk: Buffer.alloc(32, 1), expiresAt: Date.now() + 3600_000 }
+  const entries = [
+    {
+      rel: 'gone.md',
+      abs: path.join(process.env.TEMP ?? '/tmp', `rc-gone-${Date.now()}.md`),
+      size: 10,
+      mtime: Date.now(),
+      mode: 0o644,
+      hash: 'x',
+    },
+  ]
+  try {
+    const startedAt = Date.now()
+    await assert.rejects(() => peer.push({ entries }), /读不到|ENOENT/)
+    const spent = Date.now() - startedAt
+    assert.ok(spent < 3000, `应当立刻失败，实际等了 ${spent} ms（等于挂到超时）`)
+    assert.ok(await waitFor(() => hits.del >= 1), '对端应当收到一条 DELETE 把这个批批次收掉')
+  } finally {
+    peer.close()
+    await new Promise((r) => server.close(r))
+  }
+})
+
+console.log(`peer-streams ok · ${pass} 项断言 · 失败收流 / 成功收流 / 坏流不崩 / 本地包读不到（${pass} 通过、${fail} 失败）`)
 if (fail) process.exit(1)

@@ -404,7 +404,15 @@ export class RemotePeer {
         { totalBytes, maxTotalBytes: peerMax },
       )
     }
-    const source = packStream(entries).pipe(new FrameEncoderTransform(this.session.sk))
+    // packStream 的错误**不会**经 .pipe() 传到编码器：打包途中某个文件读不到时，
+    // 这条 gzip 只是带着 error 结束，编码器既不会结束也不会报错，上传就悬在那里，
+    // 一直等到 120 秒空闲超时，用户看到的是「对端迟迟没有响应」——其实是本地文件没了。
+    const pack = packStream(entries)
+    const encoder = new FrameEncoderTransform(this.session.sk)
+    pack.on('error', (err) => {
+      encoder.destroy(err instanceof AppError ? err : new AppError('READ_FAILED', err?.message ?? String(err)))
+    })
+    const source = pack.pipe(encoder)
     let sent = 0
     source.on('data', (chunk) => {
       sent += chunk.length
