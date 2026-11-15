@@ -9,6 +9,7 @@ const suites = [
   'i18n-guard.mjs',
   'a11y.mjs',
   'toast-a11y.mjs',
+  'client-port.mjs',
   'logger.mjs',
   'tasks.mjs',
   'task-fields.mjs',

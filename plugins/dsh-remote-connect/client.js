@@ -92,6 +92,8 @@ window.__ModuleLoader__.load({
       'connect.scanEmpty': '没有发现设备，请手动输入地址',
       'connect.self': '本机',
       'connect.host': '地址',
+      'net.portEmpty': '（空）',
+      'net.portInvalid': '端口要填 {min}–{max} 之间的数字（现在是「{value}」）',
       'connect.thisMachine': '本机 {addr}',
       'connect.port': '端口',
       'connect.password': '密码',
@@ -270,6 +272,8 @@ window.__ModuleLoader__.load({
       'connect.scanEmpty': 'Nothing found — enter the address manually',
       'connect.self': 'This machine',
       'connect.host': 'Host',
+      'net.portEmpty': '(empty)',
+      'net.portInvalid': 'Port must be a number between {min} and {max} (got "{value}")',
       'connect.thisMachine': 'This machine {addr}',
       'connect.port': 'Port',
       'connect.password': 'Password',
@@ -510,6 +514,19 @@ window.__ModuleLoader__.load({
         i += 1
       }
       return (x >= 10 ? x.toFixed(0) : x.toFixed(1)) + ' ' + units[i]
+    }
+
+    /**
+     * 端口按字面读：'abc'、''、'0'、'70000' 都不能悄悄变成默认值。
+     * 以前写的是 `Number(port) || 8788`，用户填错之后界面还是会说「已保存」——
+     * 他以为自己改成了 A，实际保存的是默认端口。
+     */
+    function parsePort(raw, { min = 1024, max = 65535 } = {}) {
+      const text = String(raw ?? '').trim()
+      if (!/^\d{1,5}$/.test(text)) return { ok: false, text }
+      const value = Number(text)
+      if (!Number.isInteger(value) || value < min || value > max) return { ok: false, text }
+      return { ok: true, value, text }
     }
 
     function timeText(ts) {
@@ -1073,10 +1090,14 @@ window.__ModuleLoader__.load({
       const [busyPeer, setBusyPeer] = useState('')
 
       const saveServer = async () => {
+        const parsed = parsePort(port, { min: 1024, max: 65535 })
+        if (!parsed.ok) {
+          return notify(t('net.portInvalid', { value: parsed.text || t('net.portEmpty'), min: 1024, max: 65535 }), 'error')
+        }
         setSaving(true)
         try {
           await api('/config', 'POST', {
-            server: { port: Number(port) || 8788, bind, discovery, enabled: cfg.server.enabled },
+            server: { port: parsed.value, bind, discovery, enabled: cfg.server.enabled },
           })
           await reload(true)
           notify(t('toast.saved'))
@@ -1103,13 +1124,29 @@ window.__ModuleLoader__.load({
       }
 
       const connect = async (override) => {
-        const payload = override || {
-          host: form.host.trim(),
-          port: Number(form.port) || 8788,
+        if (override) {
+          // 从扫描结果里点进来的：端口是探测出来的数字，仍然按同一套规则核一遍
+          const parsed = parsePort(override.port, { min: 1, max: 65535 })
+          if (!parsed.ok) {
+            return notify(t('net.portInvalid', { value: parsed.text || t('net.portEmpty'), min: 1, max: 65535 }), 'error')
+          }
+          return runConnect({ ...override, port: parsed.value })
+        }
+        const host = form.host.trim()
+        if (!host) return notify(t('connect.host'), 'error')
+        const parsed = parsePort(form.port, { min: 1, max: 65535 })
+        if (!parsed.ok) {
+          return notify(t('net.portInvalid', { value: parsed.text || t('net.portEmpty'), min: 1, max: 65535 }), 'error')
+        }
+        return runConnect({
+          host,
+          port: parsed.value,
           password: form.password,
           name: form.name.trim() || undefined,
-        }
-        if (!payload.host) return notify(t('connect.host'), 'error')
+        })
+      }
+
+      const runConnect = async (payload) => {
         setConnecting(true)
         try {
           await api('/connect', 'POST', payload)
