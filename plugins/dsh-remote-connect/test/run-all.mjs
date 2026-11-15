@@ -31,6 +31,7 @@ const suites = [
   'peer-body.mjs',
   'handshake-guard.mjs',
   'server-limits.mjs',
+  'handshake-flood.mjs',
   'server-auth.mjs',
   'rollback.mjs',
   'apply-discard.mjs',

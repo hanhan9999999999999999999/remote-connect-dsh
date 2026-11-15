@@ -40,6 +40,9 @@ const CHALLENGE_TTL = 60 * 1000
 const IDLE_MS = 120 * 1000
 // 同时挂着的连接数上限。这是个给别人连的 P2P 服务，正常人只开几条。
 const MAX_CONNECTIONS = 128
+// 同时挂着的握手挑战票上限。正常人的握手是「进来一次、验证一次」，
+// 一两张票就够；512 是给手动重试与多设备留的余量。
+const MAX_CHALLENGES = 512
 
 function jsonBody(req, limit = MAX_JSON) {
   return new Promise((resolve, reject) => {
@@ -60,7 +63,7 @@ function jsonBody(req, limit = MAX_JSON) {
 }
 
 export class LinkServer {
-  constructor({ store, logger, onEvent, idleMs, maxConnections, nonceMax, failureMax } = {}) {
+  constructor({ store, logger, onEvent, idleMs, maxConnections, nonceMax, failureMax, maxChallenges } = {}) {
     this.store = store
     this.logger = logger
     this.onEvent = onEvent
@@ -72,6 +75,10 @@ export class LinkServer {
     this.port = null
     this.sessions = new Map()
     this.challenges = new Map()
+    // 握手是公开路由：谁能连上谁就能要一张挑战票。不封顶的话，一分钟几千次
+    // 就能把这张表灌满（每张票带设备信息与两个随机数），而且每次进门都要全表扫一遍过期的。
+    this.maxChallenges =
+      Number.isInteger(maxChallenges) && maxChallenges > 0 ? maxChallenges : MAX_CHALLENGES
     this.guard = new FailureTracker(Number.isInteger(failureMax) && failureMax > 0 ? { max: failureMax } : {})
     this.nonces = new NonceStore(Number.isInteger(nonceMax) && nonceMax > 0 ? { max: nonceMax } : {})
     this.prunedAt = 0
@@ -416,7 +423,8 @@ export class LinkServer {
       ip,
       expiresAt: Date.now() + CHALLENGE_TTL,
     })
-    this.#prune()
+    this.#trimChallenges()
+    this.#maybePrune()
     this.logger?.info('auth', `收到来自 ${device.name} (${ip}) 的连接请求`)
     this.#plain(res, 200, {
       challengeId,
@@ -695,6 +703,18 @@ export class LinkServer {
   #maybePrune() {
     if (Date.now() - this.prunedAt < 30 * 1000) return
     this.#prune()
+  }
+
+  /**
+   * 握手挑战票封顶：超了就按到期时间从早到晚丢掉最旧的那些。
+   * 丢掉的那张票再来验证会得到 `CHALLENGE_EXPIRED`，让对方重新握手——
+   * 这比「让整张表一直涨、并且每次进门都全表扫一遍」要好。
+   */
+  #trimChallenges() {
+    const overflow = this.challenges.size - this.maxChallenges
+    if (overflow <= 0) return
+    const oldest = [...this.challenges.entries()].sort((a, b) => a[1].expiresAt - b[1].expiresAt)
+    for (let i = 0; i < overflow; i += 1) this.challenges.delete(oldest[i][0])
   }
 }
 
