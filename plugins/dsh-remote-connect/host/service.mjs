@@ -18,12 +18,22 @@ import { CATEGORY_ORDER, CATEGORIES, listProfiles } from './inventory.mjs'
 import { installPluginDeps, scanPluginDeps } from './deps.mjs'
 import { TaskTable, newTask, taskView } from './tasks.mjs'
 
+/**
+ * 同时最多允许几个同步在跑。
+ *
+ * 每个同步都要读文件、算哈希、走一条长连接，还要在对端立一个批次；开太多只会互相
+ * 抢磁盘与带宽，把对端的连接数和内存一起推高，界面上还分不清是哪一条卡住了。
+ */
+const MAX_CONCURRENT_SYNCS = 3
+
 export class LinkService {
-  constructor({ logger, store, peerStore } = {}) {
+  constructor({ logger, store, peerStore, maxConcurrentSyncs } = {}) {
     this.logger = logger ?? new Logger({ file: path.join(dataHome(), 'remote-connect.log') })
     this.store = store ?? new ConfigStore()
     // 和 store 一样允许注入：测试要能看清到底写进了哪个文件
     this.peerStore = peerStore ?? new PeerStore()
+    this.maxConcurrentSyncs =
+      Number.isInteger(maxConcurrentSyncs) && maxConcurrentSyncs > 0 ? maxConcurrentSyncs : MAX_CONCURRENT_SYNCS
     this.server = null
     this.localApplier = null
     this.packCache = null
@@ -445,6 +455,22 @@ export class LinkService {
   /* ---------------------------------------------------------------- */
 
   startSync({ peerId, direction = 'push', cats, includeSecrets = false }) {
+    // 先看有没有位置：同一台设备同时只跑一条，否则两条同步会在同一批文件上抢着写；
+    // 全局也有上限，免得一口气开几十条把磁盘和对端一起拖垮。
+    const running = this.tasks.listRefs().filter((t) => !t.finishedAt)
+    const same = running.find((t) => t.peerId === peerId)
+    if (same) {
+      throw new AppError(
+        'SYNC_BUSY',
+        `这台设备还有一个同步没结束（${same.phase}），等它完成或取消再开始下一条`,
+      )
+    }
+    if (running.length >= this.maxConcurrentSyncs) {
+      throw new AppError(
+        'SYNC_BUSY',
+        `同时最多 ${this.maxConcurrentSyncs} 个同步在跑，等前面的结束再开始这一条`,
+      )
+    }
     const task = this.tasks.add(newTask({ direction, peerId }))
     task.cancelRequested = false
     this.#runSync(task, { cats, includeSecrets })

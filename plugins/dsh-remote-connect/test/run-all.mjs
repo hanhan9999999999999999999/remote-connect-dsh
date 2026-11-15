@@ -56,6 +56,7 @@ const suites = [
   'peer-streams.mjs',
   'config.mjs',
   'sync-cancel.mjs',
+  'sync-concurrency.mjs',
   'forget-cancel.mjs',
   'disconnect-hardening.mjs',
   'sync-progress.mjs',
