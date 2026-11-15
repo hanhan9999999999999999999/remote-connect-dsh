@@ -2,6 +2,19 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.69 — 2026-11-15
+
+### 修复
+
+- **条数上限只在「边收边数」时生效**：`sync.maxFiles`（默认 200000）是 1.0.67 加的，但它只在落地途中数——对端声明五百万个 0 字节文件，本机照样先建批次、先收、先把 `backups/` 与 `journal.jsonl` 写一遍，数到头才失败。现在 `/apply/prepare` 就按对端声明的 `totalFiles` 对账：超了直接 413 `TOO_MANY_FILES`，一个空批次都不建。
+- 同一处让推的一侧也能提前停：`/apply/prepare` 的响应里多回一个 `maxFiles`，`push()` 拿到之后先比条目数，超了就一个字节都不发（不传、不开进度轮询），并顺手 `DELETE /apply/<syncId>?reason=…` 把对端刚建好的批次撤掉——否则那条记录会一直挂在它的面板上显示「接收中」。
+- 老版本对端不声明条数时照旧放行（`totalFiles` 缺失按 0 算），`push()` 那边 `prep.maxFiles` 缺失也不拦。
+
+### 新增
+
+- `test/prepare-files.mjs`（6 项断言）：真 `LinkServer` 上声明 9 条 → 413 且不建批次；声明 3 条 → 200 并回 `maxFiles`；不声明 → 放行；假对端说「最多收 1 个」而我要传 3 个 → 抛 `TOO_MANY_FILES`、不发 `PUT`、不发 `/progress`、但发了一条指向该批次的 `DELETE`；假对端不给 `maxFiles` → 照旧推送成功。
+- 这个文件能接两个路径参数（`host/server.mjs` 与 `host/peer.mjs`，用 `-` 占位表示用默认）。拿 `v1.0.68` 的两个文件分别跑：换掉 server 时 2 条红，换掉 peer 时 1 条红。
+
 ## 1.0.68 — 2026-11-15
 
 ### 修复

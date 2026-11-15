@@ -266,6 +266,7 @@ export class LinkServer {
       // 对端要推多少，先算账：等它把几个 GB 传上来再报超限，等于白占带宽和磁盘。
       const cfg = await this.store.get()
       const maxTotalBytes = (cfg.sync.maxTotalMb ?? 8192) * 1024 * 1024
+      const maxFiles = Number.isFinite(cfg.sync.maxFiles) && cfg.sync.maxFiles > 0 ? cfg.sync.maxFiles : 200000
       const want = Number(payload?.totalBytes ?? 0)
       if (Number.isFinite(want) && want > maxTotalBytes) {
         return this.#error(
@@ -276,8 +277,20 @@ export class LinkServer {
           `对端要传 ${want} 字节，超过本机上限 ${maxTotalBytes} 字节（改「同步上限」或分批）`,
         )
       }
+      // 条数也要在开传之前对账：一个 0 字节文件也占一条记录、一个备份位，
+      // 五百万条传完才发现超限，等于把 backups/ 和 journal 先撑一遍。
+      const wantFiles = Number(payload?.totalFiles ?? 0)
+      if (Number.isFinite(wantFiles) && wantFiles > maxFiles) {
+        return this.#error(
+          res,
+          session,
+          413,
+          'TOO_MANY_FILES',
+          `对端要传 ${wantFiles} 个文件，超过本机上限 ${maxFiles} 个（改「单次文件数」或分批）`,
+        )
+      }
       const state = await this.applier.prepare({ from: payload.from ?? session.device, meta: payload })
-      return this.#enc(res, session, { syncId: state.id, maxTotalBytes })
+      return this.#enc(res, session, { syncId: state.id, maxTotalBytes, maxFiles })
     }
     if ((req.method === 'PUT' || req.method === 'POST') && sub.startsWith('/apply/')) {
       const syncId = sub.slice('/apply/'.length)

@@ -404,6 +404,17 @@ export class RemotePeer {
         { totalBytes, maxTotalBytes: peerMax },
       )
     }
+    // 条数同理：对端最多收多少个文件，也在 prepare 里告诉我们了。
+    // 超了就一个字节都不发，并把它刚建好的批次撤掉，别在它面板上留一条永远「接收中」的记录。
+    const peerMaxFiles = Number(prep.maxFiles ?? 0)
+    if (peerMaxFiles > 0 && entries.length > peerMaxFiles) {
+      await this.#cancelRemote(syncId, `条目数超过对端上限 ${peerMaxFiles}`)
+      throw new AppError(
+        'TOO_MANY_FILES',
+        `这次要传 ${entries.length} 个文件，超过对端上限 ${peerMaxFiles} 个（让对方调高「单次文件数」或分批同步）`,
+        { files: entries.length, maxFiles: peerMaxFiles },
+      )
+    }
     // packStream 的错误**不会**经 .pipe() 传到编码器：打包途中某个文件读不到时，
     // 这条 gzip 只是带着 error 结束，编码器既不会结束也不会报错，上传就悬在那里，
     // 一直等到 120 秒空闲超时，用户看到的是「对端迟迟没有响应」——其实是本地文件没了。

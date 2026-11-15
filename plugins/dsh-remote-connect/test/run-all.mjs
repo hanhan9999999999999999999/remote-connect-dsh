@@ -45,6 +45,7 @@ const suites = [
   'discovery-limits.mjs',
   'pack.mjs',
   'push-guard.mjs',
+  'prepare-files.mjs',
   'frames.mjs',
   'crypto-guard.mjs',
   'signature.mjs',
