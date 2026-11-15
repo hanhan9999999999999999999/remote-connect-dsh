@@ -87,6 +87,7 @@ function defaultConfig() {
       includeCredentials: false,
       maxFileMb: 512,
       maxTotalMb: 8192,
+      maxFiles: 200000,
       backupKeep: 5,
       compress: true,
     },
@@ -217,6 +218,7 @@ export class ConfigStore {
     merged.sync.includeCredentials = parseBool(merged.sync.includeCredentials, false)
     merged.sync.maxFileMb = clampInt(merged.sync.maxFileMb, 1, 65536, base.sync.maxFileMb)
     merged.sync.maxTotalMb = clampInt(merged.sync.maxTotalMb, 1, 65536, base.sync.maxTotalMb)
+    merged.sync.maxFiles = clampInt(merged.sync.maxFiles, 1, 2000000, base.sync.maxFiles)
     merged.sync.backupKeep = clampInt(merged.sync.backupKeep, 1, 50, base.sync.backupKeep)
     merged.sync.compress = parseBool(merged.sync.compress, base.sync.compress)
 
@@ -260,10 +262,10 @@ export class ConfigStore {
       for (const key of ['includeCredentials']) {
         if (patch.sync[key] !== undefined) next.sync[key] = Boolean(patch.sync[key])
       }
-      for (const key of ['maxFileMb', 'maxTotalMb', 'backupKeep']) {
+      for (const key of ['maxFileMb', 'maxTotalMb', 'backupKeep', 'maxFiles']) {
         if (patch.sync[key] !== undefined) {
-          const max = key === 'backupKeep' ? 50 : 65536
-          next.sync[key] = clampInt(patch.sync[key], key === 'backupKeep' ? 1 : 1, max, next.sync[key])
+          const max = key === 'backupKeep' ? 50 : key === 'maxFiles' ? 2000000 : 65536
+          next.sync[key] = clampInt(patch.sync[key], 1, max, next.sync[key])
         }
       }
     }

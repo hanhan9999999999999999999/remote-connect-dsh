@@ -151,6 +151,10 @@ export class Applier {
     const backupRoot = path.join(dataHomeRoot, 'backups', syncId)
     const journalFile = path.join(state.dir, 'journal.jsonl')
     const maxBytes = (this.sync.maxTotalMb ?? 8192) * 1024 * 1024
+    // 字节数有上限，但「条数」以前没有：对端可以发几百万个 0 字节文件，
+    // 一样能把 backups/ 和 journal 撑爆，只是不走字节这条路。
+    const maxFiles = Number.isFinite(this.sync.maxFiles) && this.sync.maxFiles > 0 ? this.sync.maxFiles : 200000
+    let handled = 0
     let pendingFlush = []
     let lastEvent = 0
     // 半途失败时可能留下 *.dshlink 临时文件：记下来，退出前清掉。
@@ -164,6 +168,10 @@ export class Applier {
     }
 
     const handler = async (meta) => {
+      handled += 1
+      if (handled > maxFiles) {
+        throw new AppError('TOO_MANY_FILES', `这次同步的条目数超过上限 ${maxFiles}`)
+      }
       if (meta.type === 'dir') return null
       let abs
       try {

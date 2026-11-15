@@ -36,6 +36,7 @@ const suites = [
   'local-syncs.mjs',
   'status-degraded.mjs',
   'apply-guard.mjs',
+  'apply-files.mjs',
   'pack-safety.mjs',
   'tar-hostile.mjs',
   'tar-write.mjs',

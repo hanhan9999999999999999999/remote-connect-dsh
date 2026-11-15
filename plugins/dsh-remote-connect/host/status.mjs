@@ -45,6 +45,7 @@ export const STATUS = {
   SIZE_MISMATCH: 400,
   // 太大
   TOO_LARGE: 413,
+  TOO_MANY_FILES: 413,
   BODY_TOO_LARGE: 413,
   // 对端的问题（网关类）
   NETWORK: 502,
