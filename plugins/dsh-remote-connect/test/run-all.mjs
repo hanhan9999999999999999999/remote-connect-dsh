@@ -10,6 +10,7 @@ const suites = [
   'a11y.mjs',
   'toast-a11y.mjs',
   'client-port.mjs',
+  'client-host.mjs',
   'logger.mjs',
   'tasks.mjs',
   'task-fields.mjs',

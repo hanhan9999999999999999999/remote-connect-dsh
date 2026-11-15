@@ -92,6 +92,7 @@ window.__ModuleLoader__.load({
       'connect.scanEmpty': '没有发现设备，请手动输入地址',
       'connect.self': '本机',
       'connect.host': '地址',
+      'connect.hostInvalid': '这个地址不太对：{value}',
       'net.portEmpty': '（空）',
       'net.portInvalid': '端口要填 {min}–{max} 之间的数字（现在是「{value}」）',
       'connect.thisMachine': '本机 {addr}',
@@ -272,6 +273,7 @@ window.__ModuleLoader__.load({
       'connect.scanEmpty': 'Nothing found — enter the address manually',
       'connect.self': 'This machine',
       'connect.host': 'Host',
+      'connect.hostInvalid': 'That address does not look right: {value}',
       'net.portEmpty': '(empty)',
       'net.portInvalid': 'Port must be a number between {min} and {max} (got "{value}")',
       'connect.thisMachine': 'This machine {addr}',
@@ -527,6 +529,46 @@ window.__ModuleLoader__.load({
       const value = Number(text)
       if (!Number.isInteger(value) || value < min || value > max) return { ok: false, text }
       return { ok: true, value, text }
+    }
+
+    /**
+     * 「地址」这一栏按人真的会填的样子读：可以只有主机，也可以带端口（`192.168.1.20:8899`），
+     * 更常见的是把面板里那整串 `dshlink://192.168.1.5:8788?name=…&pwd=…` 直接粘进来——
+     * 复制按钮就在旁边，谁会拆开抄。
+     * 以前一律当主机名发出去，粘整串的结果是去连一个叫 `dshlink://…` 的主机，报一句 DNS 找不到。
+     */
+    function parseHostInput(raw, { defaultPort = 8788 } = {}) {
+      const text = String(raw ?? '').trim()
+      if (!text) return { ok: false, reason: 'empty', text }
+      if (/^dshlink:\/\//i.test(text)) {
+        let url
+        try {
+          url = new URL(text.replace(/^dshlink:\/\//i, 'http://'))
+        } catch {
+          return { ok: false, reason: 'link', text }
+        }
+        const host = url.hostname
+        if (!host) return { ok: false, reason: 'link', text }
+        const port = Number(url.port || defaultPort)
+        if (!Number.isInteger(port) || port < 1 || port > 65535) return { ok: false, reason: 'link', text }
+        return {
+          ok: true,
+          host,
+          port,
+          fromLink: true,
+          password: url.searchParams.get('pwd') || '',
+          name: url.searchParams.get('name') || '',
+          text,
+        }
+      }
+      const stripped = text.replace(/^https?:\/\//i, '').replace(/\/+$/, '')
+      const m = /^([^\s/:]+)(?::(\d{1,5}))?$/.exec(stripped)
+      if (!m) return { ok: false, reason: 'host', text }
+      const host = m[1]
+      if (!m[2]) return { ok: true, host, text }
+      const port = Number(m[2])
+      if (!Number.isInteger(port) || port < 1 || port > 65535) return { ok: false, reason: 'host', text }
+      return { ok: true, host, port, text }
     }
 
     function timeText(ts) {
@@ -1132,17 +1174,21 @@ window.__ModuleLoader__.load({
           }
           return runConnect({ ...override, port: parsed.value })
         }
-        const host = form.host.trim()
-        if (!host) return notify(t('connect.host'), 'error')
-        const parsed = parsePort(form.port, { min: 1, max: 65535 })
+        const parsedHost = parseHostInput(form.host, { defaultPort: 8788 })
+        if (!parsedHost.ok) {
+          if (parsedHost.reason === 'empty') return notify(t('connect.host'), 'error')
+          return notify(t('connect.hostInvalid', { value: parsedHost.text.slice(0, 80) }), 'error')
+        }
+        // 粘的是整串 dshlink:// 时，端口 / 密码 / 备注名以链接里的为准（链接里没写的才用手填的）
+        const parsed = parsePort(parsedHost.port ?? form.port, { min: 1, max: 65535 })
         if (!parsed.ok) {
           return notify(t('net.portInvalid', { value: parsed.text || t('net.portEmpty'), min: 1, max: 65535 }), 'error')
         }
         return runConnect({
-          host,
+          host: parsedHost.host,
           port: parsed.value,
-          password: form.password,
-          name: form.name.trim() || undefined,
+          password: parsedHost.fromLink && parsedHost.password ? parsedHost.password : form.password,
+          name: parsedHost.fromLink && parsedHost.name ? parsedHost.name : form.name.trim() || undefined,
         })
       }
 

@@ -105,7 +105,7 @@ ok('校验不过就直接返回（不发请求）', /if \(!parsed\.ok\)[\s\S]{0,
 
 const connAt = text.indexOf('const connect = async (override) => {')
 const connBlock = connAt >= 0 ? text.slice(connAt, connAt + 1400) : ''
-ok('连接前也校验端口', /parsePort\(form\.port,/.test(connBlock) && /parsePort\(override\.port,/.test(connBlock))
+ok('连接前也校验端口', /parsePort\((?:parsedHost\.port \?\? )?form\.port,/.test(connBlock) && /parsePort\(override\.port,/.test(connBlock))
 ok('连接校验不过时也直接返回', /if \(!parsed\.ok\)[\s\S]{0,200}return notify\(t\('net\.portInvalid'/.test(connBlock))
 
 // —— 3. 不许再退回「悄悄兜底」
