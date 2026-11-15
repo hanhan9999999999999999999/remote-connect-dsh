@@ -58,6 +58,7 @@ const suites = [
   'phone-http.mjs',
   'phone-switch.mjs',
   'phone-port-sync.mjs',
+  'phone-stop.mjs',
   'e2e.mjs',
 ]
 

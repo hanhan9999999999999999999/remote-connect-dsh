@@ -35,6 +35,9 @@ export const __test = {
   portStatusFor,
   killPid,
   switchPort,
+  stopBridge,
+  writePauseFlag,
+  clearPauseFlag,
   snapshot,
   detectBridgePort,
 };
@@ -644,21 +647,76 @@ async function switchPort(target, deps = {}) {
   return { switched: true, port: p, from: cur, ...r };
 }
 
-async function stopBridge() {
+function writePauseFlag() {
   try {
     mkdirSync(RUNTIME_DIR, { recursive: true });
     writeFileSync(PAUSE_FLAG, JSON.stringify({ at: new Date().toISOString(), by: 'dsh-remote-connect' }), 'utf8');
+    return null;
   } catch (e) {
-    return { stopped: false, error: `写 paused.flag 失败: ${String(e && e.message)}` };
+    return `写 paused.flag 失败: ${String(e && e.message)}`;
   }
-  const pid = await listenerPid();
-  const killed = pid ? await killPid(pid) : false;
+}
+
+function clearPauseFlag() {
+  try {
+    if (existsSync(PAUSE_FLAG)) unlinkSync(PAUSE_FLAG);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 停掉手机通道。
+ *
+ * 三步的顺序不能反：①先弄清它到底在哪个端口上活着（`runtime/port.json` 可能过期，
+ * 顺延之后没写成的情况见 `snapshot()`）；②再写暂停标记（免得中途 DSH 重启又把它拉起来）；
+ * ③最后才杀进程并等它真的走。
+ *
+ * 停止失败必须把暂停标记撤掉——否则服务还在跑、下次启动却不会自动起来，
+ * 用户看到的是「明明在运行，重启之后就不见了」。以前按记录端口去杀，
+ * 记录过期时一个 pid 都找不到，干等 12 秒报「进程仍在响应」。
+ */
+async function stopBridge(deps = {}) {
+  const healthFn = deps.health ?? health;
+  const detectFn = deps.detectBridgePort ?? detectBridgePort;
+  const listenerFn = deps.listenerPid ?? listenerPid;
+  const killFn = deps.killPid ?? killPid;
+  const sleepFn = deps.sleep ?? sleep;
+  const pauseFn = deps.writePauseFlag ?? writePauseFlag;
+  const resumeFn = deps.clearPauseFlag ?? clearPauseFlag;
+  const recorded = deps.bridgePort ? deps.bridgePort() : bridgePort();
+
+  let port = recorded;
+  if (!(await healthFn(1500, recorded))) {
+    const found = (await detectFn(recorded)) || 0;
+    if (!found || !(await healthFn(800, found))) {
+      return { stopped: true, already: true, port: null, recordedPort: recorded };
+    }
+    port = found;
+  }
+
+  const flagErr = pauseFn();
+  if (flagErr) return { stopped: false, port, recordedPort: recorded, error: flagErr };
+
+  const pid = await listenerFn(port);
+  const killed = pid ? await killFn(pid) : false;
   const t0 = Date.now();
   while (Date.now() - t0 < 12000) {
-    if (!(await health(800))) return { stopped: true, pid: pid || null, killed, waitedMs: Date.now() - t0 };
-    await sleep(400);
+    if (!(await healthFn(800, port))) {
+      return { stopped: true, port, recordedPort: recorded, pid: pid || null, killed, waitedMs: Date.now() - t0 };
+    }
+    await sleepFn(400);
   }
-  return { stopped: false, pid: pid || null, killed, error: '进程仍在响应' };
+  const resumed = resumeFn();
+  return {
+    stopped: false,
+    port,
+    recordedPort: recorded,
+    pid: pid || null,
+    killed,
+    error: `进程仍在响应${resumed ? '（已撤销暂停标记，免得下次启动时它不回来）' : '（暂停标记没能撤销，下次启动可能不会自动起来）'}`,
+  };
 }
 
 /**

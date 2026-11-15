@@ -1510,6 +1510,8 @@ window.__ModuleLoader__.load({
           // 端口顺延后记录没写成：服务是起来了，但必须马上告诉人，别等下次重启才发现对不上
           if (r && r.portWriteFailed) notify(t('phone.portWriteWarn', { port: r.port, from: r.fromPort }), 'warn')
           else if (r && r.portMismatch) notify(t('phone.portMismatch', { rec: r.recordedPort, got: r.port }), 'warn')
+          // 停止没成功：服务还在跑，得当场说一声，别让人以为已经停了
+          if (r && r.stopped === false && r.error) notify(r.error, 'warn')
         } catch (e) {
           notify(e.message, 'error')
         } finally {

@@ -11,7 +11,7 @@ import path from 'node:path'
 export const APP_ID = 'dsh-remote-connect'
 export const APP_NAME = '远程互联'
 export const PROTOCOL = 'dsh-link/v1'
-export const VERSION = '1.0.60'
+export const VERSION = '1.0.61'
 
 /** @returns {string} */
 export function rid(bytes = 12) {
