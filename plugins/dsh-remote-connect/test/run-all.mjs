@@ -38,6 +38,7 @@ const suites = [
   'status-degraded.mjs',
   'apply-guard.mjs',
   'apply-files.mjs',
+  'apply-write.mjs',
   'pack-safety.mjs',
   'tar-hostile.mjs',
   'tar-write.mjs',

@@ -34,6 +34,9 @@ export class Applier {
     this.syncs = new Map()
     this.recentCache = { at: 0, rows: null }
     this.recentReads = 0
+    // 落地时往 *.dshlink 临时文件里写，这里留一个注入点：
+    // 磁盘满 / 配额超了这些情况本机造不出来，测试要能替成一条会出错的流。
+    this.createWriteStream = (file) => fs.createWriteStream(file)
   }
 
   #dir(syncId) {
@@ -159,6 +162,11 @@ export class Applier {
     let lastEvent = 0
     // 半途失败时可能留下 *.dshlink 临时文件：记下来，退出前清掉。
     const tmpFiles = new Set()
+    // 还开着的写流也记下来：盘满、配额超了、连接半路断开时，流不关就删不掉文件
+    // （Windows 上删除会 EBUSY/EPERM），一个句柄还挂在那儿。
+    const openStreams = new Map()
+    const writeErr = (rel, err) =>
+      new AppError('WRITE_FAILED', `写入临时文件失败：${rel}`, { reason: String(err?.message ?? err) })
 
     const flushJournal = async (force = false) => {
       if (!pendingFlush.length && !force) return
@@ -220,14 +228,39 @@ export class Applier {
       }
       const tmp = `${abs}.${process.pid}.${rid(3)}.dshlink`
       tmpFiles.add(tmp)
-      const stream = fs.createWriteStream(tmp)
+      const stream = this.createWriteStream(tmp)
+      openStreams.set(tmp, stream)
+      // 写流上必须有人接 error：`createWriteStream` 的错是异步的，没人接就会升级成
+      // 未捕获异常（整个 DSH 退出），而只等 drain 的那条路则会一直等下去。
+      let streamErr = null
+      stream.on('error', (err) => {
+        streamErr = err
+      })
       return {
         async write(chunk) {
+          if (streamErr) throw writeErr(meta.rel, streamErr)
           written += chunk.length
           state.bytes += chunk.length
           if (state.bytes > maxBytes) throw new AppError('TOO_LARGE', '超出本次同步的字节上限')
           hasher.update(chunk)
-          if (!stream.write(chunk)) await new Promise((r) => stream.once('drain', r))
+          if (!stream.write(chunk)) {
+            await new Promise((resolve, reject) => {
+              const done = () => {
+                stream.off('drain', onDrain)
+                stream.off('error', onError)
+              }
+              const onDrain = () => {
+                done()
+                resolve()
+              }
+              const onError = (err) => {
+                done()
+                reject(writeErr(meta.rel, err))
+              }
+              stream.once('drain', onDrain)
+              stream.once('error', onError)
+            })
+          }
           const now = Date.now()
           if (now - lastEvent > 200) {
             lastEvent = now
@@ -235,9 +268,14 @@ export class Applier {
           }
         },
         async end() {
+          if (streamErr) throw writeErr(meta.rel, streamErr)
           await new Promise((resolve, reject) => {
-            stream.end((err) => (err ? reject(err) : resolve()))
+            stream.end((err) => (err ? reject(writeErr(meta.rel, err)) : resolve()))
           })
+          // 有的实现（尤其是已经销毁的流）不会把错误交给 end 的回调，只会 emit：
+          // 这一句是最后一道闸门，没有它就会一路走到 rename，报一个和真正原因无关的 ENOENT。
+          if (streamErr) throw writeErr(meta.rel, streamErr)
+          openStreams.delete(tmp)
           const digest = hasher.digest('hex')
           if (meta.hash && digest !== meta.hash) {
             await fsp.rm(tmp, { force: true })
@@ -315,6 +353,25 @@ export class Applier {
       state.error = err?.code ? `${err.code}: ${err.message}` : String(err?.message ?? err)
       state.finishedAt = Date.now()
       await flushJournal(true).catch(() => {})
+      // 先把还开着的写流关掉，再删临时文件：句柄没放，Windows 上 rm 一定失败，
+      // 那个 *.dshlink 就会一直留在用户的目录里，而且每失败一次多漏一个句柄。
+      for (const [tmp, stream] of openStreams) {
+        await new Promise((resolve) => {
+          let settled = false
+          const done = () => {
+            if (settled) return
+            settled = true
+            resolve()
+          }
+          try {
+            stream.once('close', done)
+            stream.destroy()
+          } catch {}
+          // 有的实现不会发 close（比如已经在销毁中），最多等 300ms 就往下走。
+          setTimeout(done, 300).unref?.()
+        })
+        openStreams.delete(tmp)
+      }
       for (const tmp of tmpFiles) await fsp.rm(tmp, { force: true }).catch(() => {})
       tmpFiles.clear()
       this.logger?.error('apply', `应用失败 ${syncId}`, { error: state.error })

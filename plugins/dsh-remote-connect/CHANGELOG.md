@@ -2,6 +2,20 @@
 
 所有值得注意的变更都记在这里。版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## 1.0.70 — 2026-11-15
+
+### 修复
+
+- **落地时那条写流上没有人接 `error`**：写 `*.dshlink` 临时文件的流是 `fs.createWriteStream`，它的错是异步的——盘满、配额超了、目录被删时，没人接的 `error` 会升级成未捕获异常，整个 DSH 进程跟着退出；而只等 `drain` 的那条路则会一直等下去，同步永远停在「接收中」。
+- 同一处第二个问题：失败时流还没关就去 `rm` 临时文件。Windows 上句柄还开着，删除一定失败（`EBUSY`/`EPERM`，代码里 `.catch(() => {})` 把它吞了），半截文件就留在用户自己的目录里，每失败一次还多漏一个句柄。现在失败路径先把流 `destroy()` 并等到 `close`（最多等 300ms）再删文件。
+- 写完之后的错误也不再被吞：`end()` 里补了最后一道 `streamErr` 检查——否则只剩一个和真正原因无关的 `ENOENT: rename …`。
+
+### 内部
+
+- `Applier` 增加 `createWriteStream` 注入点（生产环境就是 `fs.createWriteStream`），盘满这类情况本机造不出来，测试要能替成一条会报错的流。
+- `host/status.mjs` 补 `WRITE_FAILED: 500`、`READ_FAILED: 500`，说明这是本机写盘失败、不是对端的参数问题。
+- `test/apply-write.mjs`（4 项断言）：注入「第一块就 ENOSPC」的写流 → 抛 `WRITE_FAILED` 且不留临时文件、不留半截目标文件；中途超字节上限 → 临时文件也不留；正常落地 → 文件内容正确且无残留。拿 `v1.0.69` 的 `host/apply.mjs` 跑同一测试，前两项红。
+
 ## 1.0.69 — 2026-11-15
 
 ### 修复

@@ -55,6 +55,9 @@ export const STATUS = {
   BAD_ENVELOPE: 502,
   PHONE_BAD_RESPONSE: 502,
   NO_PORT: 502,
+  // 本机写盘失败（盘满、配额、临时文件删不掉）——不是对端的错，也不该被当成 400
+  WRITE_FAILED: 500,
+  READ_FAILED: 500,
 }
 
 export function statusFor(code) {
