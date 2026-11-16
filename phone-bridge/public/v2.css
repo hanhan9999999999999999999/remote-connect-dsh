@@ -1,0 +1,182 @@
+/* ============================================================
+   v2 —— 微信级聊天观感
+   1) 消息分组/时间分隔/气泡尾巴   2) Markdown 渲染
+   3) 代码块复制                   4) 打字指示器
+   5) 智能滚动 + 新消息浮标        6) 长按菜单
+   7) 图片全屏预览                 8) 快捷短语
+   ============================================================ */
+
+/* ---------- 1. 消息分组与气泡 ---------- */
+main{scroll-behavior:auto}          /* 跟手，别让 smooth 和流式打架 */
+.row{margin:3px 0;transition:margin .16s}
+.row.grp-first{margin-top:13px}
+.row.grp-mid{margin-top:2px}
+.row.grp-last{margin-bottom:9px}
+.bubble{max-width:84%;border-radius:15px;padding:9px 13px;line-height:1.5}
+.me .bubble{border-radius:15px 15px 5px 15px}
+.ai .bubble{border-radius:15px 15px 15px 5px}
+/* 连续同人消息：靠拢的那一侧收角 */
+.row.grp-mid.me .bubble,.row.grp-first.me .bubble:not(.last){border-top-right-radius:6px}
+.row.grp-mid.ai .bubble{border-top-left-radius:6px}
+.row.grp-first.ai .bubble{border-top-left-radius:6px}
+
+/* 气泡小尾巴：只给每组最后一条 */
+.ai .bubble.last::before{
+  content:'';position:absolute;left:-5px;bottom:8px;width:9px;height:9px;
+  background:var(--bg2);border-left:1px solid var(--line);border-bottom:1px solid var(--line);
+  transform:rotate(45deg);border-radius:0 0 0 2px;
+}
+.me .bubble.last::after{
+  content:'';position:absolute;right:-5px;bottom:8px;width:9px;height:9px;
+  background:#2563eb;transform:rotate(45deg);border-radius:0 0 2px 0;
+}
+
+/* 时间分隔条（微信那种居中小灰字） */
+.daysep{display:flex;justify-content:center;margin:14px 0 10px}
+.daysep span{
+  font-size:11px;color:#64748b;background:#0f141b;border:1px solid #1b2430;
+  padding:3px 10px;border-radius:999px;
+}
+
+/* 头像：小圆点，不喧哗 */
+.av{
+  flex:0 0 auto;width:26px;height:26px;border-radius:8px;display:grid;place-items:center;
+  font-size:11px;font-weight:600;margin-bottom:3px;user-select:none;
+}
+.ai .av{background:#16202c;color:#7fb3e0;border:1px solid #22303f}
+.me .av{background:#1b3050;color:#8fc3ff;border:1px solid #264a75}
+
+/* ---------- 2. Markdown 渲染 ---------- */
+.md{white-space:normal;word-break:break-word;overflow-wrap:anywhere}
+.md>*:first-child{margin-top:0}
+.md>*:last-child{margin-bottom:0}
+.md p{margin:6px 0}
+.md h1,.md h2,.md h3,.md h4{margin:12px 0 6px;line-height:1.35;font-weight:650}
+.md h1{font-size:17px}
+.md h2{font-size:16px}
+.md h3{font-size:15px}
+.md h4{font-size:14px;color:#cfd9e6}
+.md ul,.md ol{margin:4px 0 4px;padding-left:20px}
+.md li{margin:3px 0}
+.md li>ul,.md li>ol{margin:2px 0}
+.md blockquote{margin:8px 0;padding:6px 11px;border-left:3px solid #2b3a4d;background:#10161f;color:#a8b6c6;border-radius:0 8px 8px 0}
+.md hr{border:0;border-top:1px solid var(--line);margin:12px 0}
+.md a{color:#6cb2ff;text-decoration:none;border-bottom:1px dotted #3a6ea5}
+.md strong{color:#fff;font-weight:650}
+.md em{color:#d6e2f0}
+.md del{color:#7b8a9c}
+/* 行内代码 */
+.md code{
+  font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.9em;
+  background:#0d141c;border:1px solid #22303f;border-radius:5px;padding:1px 5px;color:#8fd0ff;
+}
+/* 表格 */
+.md .tb{overflow-x:auto;margin:8px 0;border:1px solid #22303f;border-radius:9px;-webkit-overflow-scrolling:touch}
+.md table{border-collapse:collapse;font-size:13px;min-width:100%}
+.md th,.md td{padding:7px 11px;border-bottom:1px solid #1b2430;text-align:left;white-space:nowrap}
+.md th{background:#131a24;color:#c6d4e4;font-weight:600}
+.md tr:last-child td{border-bottom:0}
+
+/* ---------- 3. 代码块 ---------- */
+.codeblock{margin:9px 0;border:1px solid #22303f;border-radius:11px;overflow:hidden;background:#0a0f16}
+.codeblock .cbhead{
+  display:flex;align-items:center;gap:8px;padding:6px 10px;background:#101822;
+  border-bottom:1px solid #1b2430;font-size:11px;color:#7b8ea6;
+}
+.codeblock .cbhead .lang{flex:1;text-transform:lowercase;letter-spacing:.03em}
+.codeblock .cbhead button{
+  background:#18202b;border:1px solid #26313f;color:#9fc4e6;border-radius:6px;
+  font-size:11px;padding:2px 8px;cursor:pointer;
+}
+.codeblock .cbhead button:active{transform:scale(.95)}
+.codeblock pre{
+  margin:0;padding:11px 12px;overflow-x:auto;-webkit-overflow-scrolling:touch;
+  font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12.5px;line-height:1.55;
+  color:#c8d8e8;tab-size:2;
+}
+.codeblock pre code{background:none;border:0;padding:0;color:inherit;font-size:inherit}
+
+/* ---------- 4. 打字指示器 ---------- */
+.typing{display:inline-flex;gap:4px;align-items:center;padding:3px 2px}
+.typing i{width:6px;height:6px;border-radius:50%;background:#6d8098;display:block;animation:tp 1.3s infinite}
+.typing i:nth-child(2){animation-delay:.18s}
+.typing i:nth-child(3){animation-delay:.36s}
+@keyframes tp{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-3px)}}
+
+/* ---------- 5. 新消息浮标 ---------- */
+.jump{
+  position:fixed;right:14px;bottom:96px;z-index:20;display:none;align-items:center;gap:6px;
+  background:#1d6fe0;color:#fff;border:0;border-radius:999px;padding:8px 14px;font-size:12.5px;
+  box-shadow:0 6px 20px rgba(29,111,224,.45);
+}
+.jump.show{display:inline-flex}
+.jump:active{transform:scale(.96)}
+
+/* ---------- 6. 长按菜单 ---------- */
+.ctxmenu{
+  position:fixed;z-index:80;display:none;min-width:140px;background:#161d27;
+  border:1px solid #26313f;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.55);overflow:hidden;
+}
+.ctxmenu.show{display:block}
+.ctxmenu button{
+  display:block;width:100%;text-align:left;background:none;border:0;color:#dbe6f3;
+  padding:12px 16px;font-size:14px;font-family:inherit;
+}
+.ctxmenu button:active{background:#1e2836}
+.ctxmenu button+button{border-top:1px solid #1e2732}
+
+/* ---------- 7. 图片预览 ---------- */
+.lightbox{
+  position:fixed;inset:0;z-index:90;background:rgba(0,0,0,.92);display:none;
+  align-items:center;justify-content:center;flex-direction:column;gap:14px;
+}
+.lightbox.show{display:flex}
+.lightbox img{max-width:96vw;max-height:84vh;object-fit:contain;border-radius:8px}
+.lightbox .lb-actions{display:flex;gap:10px}
+.lightbox .lb-actions button{
+  background:#1b2430;border:1px solid #2b3648;color:#cfe3ff;border-radius:10px;
+  padding:9px 16px;font-size:13px;font-family:inherit;
+}
+
+/* ---------- 8. 快捷短语 ---------- */
+.quick{display:flex;gap:7px;overflow-x:auto;padding:1px 12px 7px;scrollbar-width:none}
+.quick::-webkit-scrollbar{display:none}
+.quick button{
+  flex:0 0 auto;background:#141b24;border:1px solid #212c39;color:#a9bdd0;
+  border-radius:999px;padding:6px 12px;font-size:12.5px;font-family:inherit;white-space:nowrap;
+}
+.quick button:active{background:#1b2634}
+
+/* ---------- 9. 输入区精修 ---------- */
+footer{padding:6px 10px calc(6px + var(--safe-b));gap:7px;align-items:flex-end}
+footer .fieldwrap{flex:1 1 auto;display:flex;flex-direction:column;gap:6px;min-width:0}
+textarea{border-radius:20px;padding:11px 16px;min-height:42px;max-height:118px;line-height:1.45}
+button.send{width:42px;height:42px;border-radius:50%;font-size:16px;transition:transform .12s,opacity .12s}
+button.send.active{box-shadow:0 0 0 2px rgba(43,108,255,.35)}
+button.send:active{transform:scale(.94)}
+.attach{border-radius:50%;width:42px;height:42px;font-size:22px;display:grid;place-items:center;background:#141b24;border:1px solid #212c39}
+
+/* 发送中/失败状态 */
+.mstate{font-size:10.5px;color:#5d6b7c;margin-top:4px;display:flex;gap:8px;align-items:center}
+.mstate.fail{color:#ff8a7a}
+.mstate button{
+  background:#2a1414;border:1px solid #4a2020;color:#ff9a8a;border-radius:6px;
+  font-size:10.5px;padding:2px 8px;font-family:inherit;
+}
+
+/* ---------- 10. 顶栏精修 ---------- */
+header{gap:8px}
+header .title{font-size:16px}
+#btn-hist,#btn-new,#btn-cfg{padding:6px 10px;font-size:12px;border-radius:9px}
+.banner{margin:0 12px 6px}
+
+/* 未读提示（页面隐藏时收到回复） */
+body.away #dot{background:#3f7bd6}
+
+/* ---------- 10. 细节修正 ---------- */
+.md em{font-style:italic;color:#d7e3ee}
+.md .codeblock pre{white-space:pre-wrap;word-break:break-word}
+.md .codeblock pre code{white-space:pre-wrap}
+.md blockquote p{margin:0}
+.md h1:first-child,.md h2:first-child,.md h3:first-child{margin-top:0}
+.md>:last-child{margin-bottom:0}

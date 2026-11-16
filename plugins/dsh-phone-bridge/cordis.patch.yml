@@ -1,0 +1,3 @@
+- insert:
+    - id: phone-bridge
+      name: '@local/dsh-phone-bridge'

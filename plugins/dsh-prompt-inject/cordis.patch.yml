@@ -1,0 +1,5 @@
+# 把 @local/dsh-prompt-inject 装进 profile。
+# 需要按 profile 控制时，可以给它写 config.file 指向别的条款文件。
+- insert:
+    - id: local-prompt-inject
+      name: '@local/dsh-prompt-inject'

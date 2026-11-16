@@ -1,0 +1,86 @@
+# 运行时数据 / 密钥 / 构建产物一律不入库
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.log
+*.exe
+*.zip
+*.rar
+*.tar
+*.tgz
+*.pyd
+*.dll
+*.so
+model_config.json
+mcp_servers.json
+reminders.json
+__pycache__/
+*.pyc
+build/
+dist/
+发布/
+.venv/
+.env
+
+# Node
+node_modules/
+phone-bridge/node_modules/
+
+# 手机通道的运行态：state.json 里有连接令牌、pairCode，绝不能入库
+phone-bridge/runtime/
+phone-bridge/workspace/
+phone-bridge/_shots/
+phone-bridge/_tools/
+phone-bridge/_backup/
+phone-bridge/archive/
+
+# 本机调试与历史存档
+tmp/
+_backup/
+_build/
+_ref/
+voice-out/
+.dsh-meow/
+ai_downloads/
+*.bak
+*.corrupt-*
+
+# 配对二维码（内容含令牌）
+phone-qr.png
+
+# ── 2026-11-13 结构整理 ──
+# 运行日志统一落 logs/（start.bat 已改到这里）
+logs/
+_server_output.log
+_server_err.log
+
+# 本地模型权重（BGE-small-zh ONNX ≈92MB，按需下载，不进库）
+# 缺失时 memory/embedder.py 会打印 "ONNX model not found" 并降级到内置 TF-IDF 后端
+models/
+
+# 工具输出全文存储（tool_outputs.py 的落盘目录，索引在 data/tool_outputs.db）
+data/tool_outputs/
+
+# 记忆/统计插件本机数据
+.deja/
+
+# ── 2026-11-14 上传前整理 ──
+# data/ 全是运行态：资产索引、写盘账本、回收站工作区、访问日志（http_access.log.1 已 5MB+）
+data/
+# 隧道配置里有服务器公网地址与 root 用户名（私钥在 runtime/ 下，已被忽略）
+phone-bridge/tunnel.json
+# 时间戳备份文件（*.bak 已覆盖一部分）
+*.bak-*
+
+
+# ── 2026-11-15 上传 GitHub 前的隐私整理 ──
+# APK 的公网入口地址：真实值写在 local.properties（本机），仓库里只留 .example
+android/local.properties
+android/java/com/dsh/phone/BuildConfig.java
+# 测试台截图里有真实会话内容（含照片与对话），只在本机看
+phone-bridge/test/out/
+# 补丁包（git bundle 里含着历史提交，含过旧令牌）
+*.bundle
+# 摄像头/直播的抓帧自测图
+phone-bridge/test/_tmp/

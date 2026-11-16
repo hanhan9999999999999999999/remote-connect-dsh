@@ -1,0 +1,4 @@
+{
+  "name": "Phone remote service",
+  "desc": "Start or stop the phone bridge from the DSH UI"
+}

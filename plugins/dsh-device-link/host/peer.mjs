@@ -1,0 +1,370 @@
+/**
+ * dsh-device-link · peer client (the side that initiates)
+ */
+import http from 'node:http'
+import https from 'node:https'
+import { createGunzip } from 'node:zlib'
+import {
+  PROTOCOL,
+  VERSION,
+  AppError,
+  rid,
+  sha256,
+} from './util.mjs'
+import {
+  decryptJson,
+  deriveMasterKey,
+  deriveSessionKey,
+  encryptJson,
+  handshakeProof,
+  hmacHex,
+  randomNonce,
+  safeEqualBuf,
+  sessionReadyProof,
+} from './crypto.mjs'
+import { FrameDecoderTransform, FrameEncoder } from './frames.mjs'
+import { packStream } from './pack.mjs'
+
+const BASE = '/dsh-link/v1'
+
+export class RemotePeer {
+  constructor({ record, logger, device }) {
+    this.record = record
+    this.logger = logger
+    this.device = device
+    this.session = null
+    this.agent = null
+  }
+
+  get id() {
+    return this.record.id
+  }
+
+  #lib() {
+    return this.record.scheme === 'https' ? https : http
+  }
+
+  #agentFor() {
+    if (this.agent) return this.agent
+    const lib = this.#lib()
+    this.agent = new lib.Agent({
+      keepAlive: true,
+      maxSockets: 4,
+      rejectUnauthorized: this.record.scheme === 'https' ? this.record.insecure !== true : undefined,
+    })
+    return this.agent
+  }
+
+  close() {
+    this.agent?.destroy()
+    this.agent = null
+    this.session = null
+  }
+
+  /** Hard-stop every in-flight request (used when the user cancels a sync). */
+  abort() {
+    this.agent?.destroy()
+    this.agent = null
+  }
+
+  #baseOptions(path) {
+    return {
+      host: this.record.host,
+      port: this.record.port,
+      path: `${BASE}${path}`,
+      agent: this.#agentFor(),
+      headers: { 'user-agent': `dsh-device-link/${VERSION}` },
+    }
+  }
+
+  /** Low-level request. Resolves with the IncomingMessage (caller consumes). */
+  #request({ method, path, headers = {}, body, bodyStream, timeoutMs = 60_000 }) {
+    const lib = this.#lib()
+    const options = { ...this.#baseOptions(path), method, headers: { ...headers } }
+    return new Promise((resolve, reject) => {
+      const req = lib.request(options, (res) => resolve(res))
+      req.on('error', (err) => reject(new AppError('NETWORK', networkMessage(err), { cause: err.code })))
+      if (timeoutMs) {
+        req.setTimeout(timeoutMs, () => req.destroy(new AppError('TIMEOUT', '连接超时')))
+      } else {
+        req.setTimeout(120_000, () => req.destroy(new AppError('TIMEOUT', '长时间没有响应')))
+      }
+      if (bodyStream) {
+        bodyStream.on('error', (err) => req.destroy(err))
+        bodyStream.pipe(req)
+      } else if (body) {
+        req.end(body)
+      } else {
+        req.end()
+      }
+    })
+  }
+
+  #signedHeaders(method, path, bodyBuf, extra = {}) {
+    if (!this.session) throw new AppError('NOT_CONNECTED', '尚未连接对端')
+    const ts = Date.now()
+    const nonce = rid(12)
+    const bodySha = extra['x-dl-stream'] ? 'stream' : sha256(bodyBuf ?? Buffer.alloc(0))
+    const mac = hmacHex(this.session.sk, `${method}|${BASE}${path}|${ts}|${nonce}|${bodySha}`)
+    return {
+      ...extra,
+      'x-dl-token': this.session.token,
+      'x-dl-ts': String(ts),
+      'x-dl-nonce': nonce,
+      'x-dl-mac': mac,
+    }
+  }
+
+  async #jsonFrom(res, expectOk = true) {
+    const chunks = []
+    for await (const chunk of res) chunks.push(chunk)
+    const buf = Buffer.concat(chunks)
+    let parsed = null
+    try {
+      parsed = JSON.parse(buf.toString('utf8'))
+    } catch {
+      throw new AppError('BAD_RESPONSE', `对端返回了无法解析的内容（HTTP ${res.statusCode}）`)
+    }
+    if (parsed?.e === 1 && this.session) {
+      try {
+        parsed = decryptJson(this.session.sk, parsed)
+      } catch {
+        throw new AppError('BAD_ENVELOPE', '响应解密失败，可能两端密码不一致')
+      }
+    }
+    if (expectOk && (res.statusCode >= 400 || parsed?.error)) {
+      const err = parsed?.error ?? {}
+      throw new AppError(err.code ?? `HTTP_${res.statusCode}`, err.message ?? '对端返回错误', err.extra)
+    }
+    return parsed
+  }
+
+  async health() {
+    const res = await this.#request({ method: 'GET', path: '/health', timeoutMs: 8000 })
+    const body = await this.#jsonFrom(res, false)
+    const looksRight = body && (body.app === '设备互联' || body.app === 'dsh-device-link' || body.app === 'Device Link')
+    if (!looksRight || body.protocol !== PROTOCOL) {
+      throw new AppError('NOT_DSH_LINK', '对端不是设备互联服务，或协议版本不兼容')
+    }
+    return body
+  }
+
+  async connect({ password, rememberPassword = true } = {}) {
+    const health = await this.health()
+    if (health.protocol !== PROTOCOL) {
+      throw new AppError('VERSION_MISMATCH', `对端协议 ${health.protocol}，本机需要 ${PROTOCOL}`)
+    }
+    const pwd = password || this.record.password
+    if (!pwd) throw new AppError('NO_PASSWORD', '请输入对端连接密码')
+    const clientNonce = randomNonce(16)
+    const helloRes = await this.#request({
+      method: 'POST',
+      path: '/hello',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ device: this.device, clientNonce: clientNonce.toString('base64') }),
+      timeoutMs: 10_000,
+    })
+    const hello = await this.#jsonFrom(helloRes, false)
+    if (hello?.error) throw new AppError(hello.error.code, hello.error.message)
+    const serverNonce = Buffer.from(hello.serverNonce, 'base64')
+    const master = await deriveMasterKey(pwd, Buffer.from(hello.salt, 'base64'), hello.kdf)
+    const proof = handshakeProof(master, clientNonce, serverNonce, this.device.id)
+    const verifyRes = await this.#request({
+      method: 'POST',
+      path: '/hello/verify',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ challengeId: hello.challengeId, proof: proof.toString('base64') }),
+      timeoutMs: 20_000,
+    })
+    const verified = await this.#jsonFrom(verifyRes, false)
+    if (verified?.error) {
+      const err = new AppError(verified.error.code, verified.error.message)
+      if (verified.error.code === 'BAD_PASSWORD') await this.#rememberError(err.message)
+      throw err
+    }
+    const sk = deriveSessionKey(master, clientNonce, serverNonce)
+    if (!safeEqualBuf(sessionReadyProof(sk), Buffer.from(verified.ready ?? '', 'base64'))) {
+      throw new AppError('KEY_MISMATCH', '会话密钥校验失败')
+    }
+    this.session = {
+      token: verified.token,
+      sk,
+      expiresAt: verified.expiresAt,
+      server: verified.server,
+      ip: this.record.host,
+    }
+    this.record = {
+      ...this.record,
+      password: rememberPassword ? pwd : this.record.password,
+      token: verified.token,
+      sk: sk.toString('base64'),
+      expiresAt: verified.expiresAt,
+      deviceId: verified.server?.id ?? this.record.deviceId,
+      name: verified.server?.name ?? this.record.name,
+      platform: verified.server?.platform ?? this.record.platform,
+      version: verified.server?.version ?? this.record.version,
+      lastOkAt: Date.now(),
+      lastError: null,
+    }
+    this.logger?.info('peer', `已连接 ${this.record.name} (${this.record.host}:${this.record.port})`)
+    return { session: this.session, server: verified.server, health }
+  }
+
+  /** Reuse a stored session token if it is still valid. */
+  async restore() {
+    const r = this.record
+    if (!r.token || !r.sk || !r.expiresAt || r.expiresAt < Date.now() + 30_000) return false
+    this.session = { token: r.token, sk: Buffer.from(r.sk, 'base64'), expiresAt: r.expiresAt }
+    try {
+      await this.requestJson('GET', '/ping', { timeoutMs: 8000 })
+      return true
+    } catch (err) {
+      if (err.code === 'UNAUTHORIZED' || err.code === 'SESSION_EXPIRED') {
+        this.session = null
+        return false
+      }
+      // Network hiccup: keep the session, let the caller decide.
+      return err.code === 'NETWORK' ? Boolean(this.session) : false
+    }
+  }
+
+  async requestJson(method, path, { payload, encrypt = true, timeoutMs = 60_000 } = {}) {
+    const plain = payload === undefined ? null : Buffer.from(JSON.stringify(payload), 'utf8')
+    const body = plain && encrypt ? Buffer.from(JSON.stringify(encryptJson(this.session.sk, payload)), 'utf8') : plain
+    const headers = this.#signedHeaders(method, path, body, {
+      ...(body ? { 'content-type': 'application/json', 'content-length': String(body.length) } : {}),
+    })
+    const res = await this.#request({ method, path, headers, body, timeoutMs })
+    return this.#jsonFrom(res)
+  }
+
+  async probe() {
+    const t0 = Date.now()
+    try {
+      const info = await this.requestJson('GET', '/ping', { timeoutMs: 6000 })
+      return { ok: true, ms: Date.now() - t0, device: info.device }
+    } catch (err) {
+      return { ok: false, ms: Date.now() - t0, error: `${err.code}: ${err.message}` }
+    }
+  }
+
+  /** Ask the peer for its inventory (no file contents). */
+  async inventory({ cats, includeSecrets = false }) {
+    return this.requestJson('POST', '/inventory', { payload: { cats, includeSecrets }, timeoutMs: 120_000 })
+  }
+
+  /** Receive a pack and apply it locally. */
+  async pull({ cats, applier, includeSecrets = false, onProgress } = {}) {
+    onProgress?.({ phase: 'preparing', done: 0, total: 0 })
+    const prep = await this.requestJson('POST', '/export/prepare', {
+      payload: { cats, includeSecrets },
+      timeoutMs: 10 * 60_000,
+    })
+    onProgress?.({ phase: 'downloading', done: 0, total: prep.totalBytes, bytes: 0 })
+    const state = await applier.prepare({
+      from: this.record,
+      meta: { totalBytes: prep.totalBytes, totalFiles: prep.files },
+    })
+    state.onTick = () => onProgress?.({ phase: 'applying', ...applier.progress(state.id), total: prep.totalBytes })
+    const res = await this.#request({
+      method: 'GET',
+      path: `/export/${prep.packId}`,
+      headers: this.#signedHeaders('GET', `/export/${prep.packId}`, Buffer.alloc(0)),
+      timeoutMs: 0,
+    })
+    if (res.statusCode !== 200) {
+      const err = await this.#jsonFrom(res, false)
+      throw new AppError(err?.error?.code ?? 'EXPORT_FAILED', err?.error?.message ?? '对端拒绝导出')
+    }
+    const tar = res.pipe(new FrameDecoderTransform(this.session.sk)).pipe(createGunzip())
+    const result = await applier.applyStream(state.id, tar)
+    onProgress?.({ phase: 'done', ...result })
+    return { ...result, manifest: prep.manifest }
+  }
+
+  /** Send local files to the peer, which applies them. */
+  async push({ entries, manifest, applierSummary, onProgress } = {}) {
+    const totalBytes = entries.reduce((n, e) => n + e.size, 0)
+    onProgress?.({ phase: 'preparing', done: 0, total: totalBytes })
+    const prep = await this.requestJson('POST', '/apply/prepare', {
+      payload: {
+        from: this.device,
+        totalBytes,
+        totalFiles: entries.length,
+        manifestId: manifest?.id,
+      },
+      timeoutMs: 30_000,
+    })
+    const syncId = prep.syncId
+    const source = packStream(entries).pipe(new FrameEncoder(this.session.sk))
+    let sent = 0
+    source.on('data', (chunk) => {
+      sent += chunk.length
+      onProgress?.({ phase: 'uploading', done: sent, total: totalBytes })
+    })
+    const poller = setInterval(async () => {
+      try {
+        const p = await this.requestJson('GET', `/progress?syncId=${encodeURIComponent(syncId)}`, {
+          timeoutMs: 5000,
+        })
+        onProgress?.({ phase: 'applying', remote: p, done: sent, total: totalBytes })
+      } catch {
+        /* progress is best-effort */
+      }
+    }, 700)
+    poller.unref?.()
+    try {
+      const res = await this.#request({
+        method: 'PUT',
+        path: `/apply/${syncId}`,
+        headers: this.#signedHeaders('PUT', `/apply/${syncId}`, Buffer.alloc(0), {
+          'content-type': 'application/x-dsh-link-frames',
+          'x-dl-stream': '1',
+          'x-dl-total': String(totalBytes),
+        }),
+        bodyStream: source,
+        timeoutMs: 0,
+      })
+      const result = await this.#jsonFrom(res)
+      onProgress?.({ phase: 'done', done: totalBytes, total: totalBytes, result })
+      return result
+    } finally {
+      clearInterval(poller)
+    }
+  }
+
+  async listSyncs() {
+    return this.requestJson('GET', '/syncs', { timeoutMs: 20_000 })
+  }
+
+  async rollback(syncId) {
+    return this.requestJson('POST', '/rollback', { payload: { syncId }, timeoutMs: 120_000 })
+  }
+
+  async disconnect() {
+    try {
+      if (this.session) await this.requestJson('POST', '/bye', { payload: {}, timeoutMs: 3000 })
+    } catch {
+      /* ignore */
+    }
+    this.session = null
+    this.close()
+  }
+
+  async #rememberError(message) {
+    this.record = { ...this.record, lastError: message, lastSeen: Date.now() }
+  }
+}
+
+export function networkMessage(err) {
+  const code = err?.code
+  const map = {
+    ECONNREFUSED: '对端没有在监听这个端口（服务未开启或端口不对）',
+    EHOSTUNREACH: '网络不可达，检查两台机器是否在同一网段',
+    ENOTFOUND: '找不到这个地址',
+    ETIMEDOUT: '连接超时，检查防火墙',
+    ECONNRESET: '连接被对端重置',
+    EPIPE: '连接中断',
+  }
+  return map[code] ?? `网络错误：${err?.message ?? code ?? 'unknown'}`
+}

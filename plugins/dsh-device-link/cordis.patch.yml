@@ -1,0 +1,3 @@
+- insert:
+    - id: device-link
+      name: '@local/dsh-device-link'

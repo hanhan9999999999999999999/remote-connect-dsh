@@ -1,0 +1,12 @@
+import fs from 'node:fs/promises'; import os from 'node:os'; import path from 'node:path';
+const tmp = await fs.mkdtemp(path.join(os.tmpdir(),'dbg-')); process.env.DEVICE_LINK_HOME=path.join(tmp,'data'); process.env.DEVICE_LINK_DSH_HOME=path.join(tmp,'dsh');
+console.log('1 env');
+const { ConfigStore } = await import('../host/config.mjs');
+const store = new ConfigStore(); await store.load(); console.log('2 loaded');
+await store.patch({server:{enabled:true,port:23456,bind:'127.0.0.1',discovery:false}}); console.log('3 patched');
+await store.setPassword('SMOKE-PASSWORD-123'); console.log('4 pwd');
+const { LinkService } = await import('../host/service.mjs');
+const svc = new LinkService({store}); await svc.init(); console.log('5 init');
+const st = await svc.status(); console.log('6 status', JSON.stringify(st.server));
+await svc.server.stop(); console.log('7 stopped');
+await fs.rm(tmp,{recursive:true,force:true}); process.exit(0);

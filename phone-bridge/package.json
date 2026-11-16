@@ -1,0 +1,22 @@
+{
+  "name": "dsh-phone-bridge",
+  "version": "1.5.51",
+  "private": true,
+  "type": "module",
+  "description": "把 DSH 会话接到手机上的轻量桥：SSE、语音、提醒、文件、公网隧道",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node tests/store.test.mjs && node tests/sessions.test.mjs && node tests/pipeline.test.mjs && node tests/memory.test.mjs && node tests/emotion.test.mjs && node tests/tts-emotion.test.mjs && node tests/tts-engine.test.mjs && node tests/feiyu-endpoint.test.mjs && node tests/plugin.test.mjs",
+    "test:e2e": "node scripts/run-e2e.mjs",
+    "test:tts": "node tests/tts-progress.test.mjs",
+    "check": "node --check server.mjs && node scripts/check-app.mjs",
+    "doctor": "node scripts/doctor.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "web-push": "^3.6.7"
+  }
+}

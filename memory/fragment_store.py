@@ -1,0 +1,1930 @@
+#!/usr/bin/env python3
+"""
+Fragment memory store — autobiographical memory fragments with:
+
+  v4.0 L3 enhanced features:
+  - 5-factor recall: recency × relevance × importance × weight × entity_match
+  - MMR deduplication (λ=0.7)
+  - Core ↔ archival bidirectional management (no hard cap)
+  - importance ≥ 7 fragments are pinned (never decay)
+  - Causal neighbor propagation (one hop, confidence ≥ 0.8)
+  - Epistemic classification (experience / world / opinion)
+  - Entity tagging for filtered recall
+  - sqlite-vec KNN acceleration if available
+
+Design matches: 自传体记忆系统完整实现计划.md §3.1, §5.1, §5.4
+"""
+import json
+import math
+import os
+import sys
+import sqlite3
+import time
+
+from .embedder import embed, cosine_sim, EMBEDDING_DIM
+from .vec_index import VecIndex
+from .write_ledger import (led_committed, led_short_circuit, led_error,
+                           get_ledger, COMMITTED, SHORT_CIRCUIT, ERROR)
+
+# ── Constants ──────────────────────────────────────
+WEIGHT_DEFAULT = 1.0
+WEIGHT_REINFORCE = 0.5    # sim > 0.85
+WEIGHT_BOOST = 0.2        # sim > 0.70
+WEIGHT_CAP = 3.0
+DECAY_HALF_LIFE_DAYS = 30
+DECAY_FLOOR = 0.3
+
+RECALL_TOP_K = 5
+RECALL_THRESHOLD = 0.5
+# relevance 硬门槛：cosine 相似度低于此值直接淘汰，不被 importance/weight 救回
+RELEVANCE_HARD_FLOOR = 0.30
+# 2026-10-15 调参实验：0.70 → 0.90
+#   实验：同一候选池、只换 MMR λ、153 正样本 + 228 负样本，生产口径
+#   (top_k=15, th=0.35, 同topic≤2, 取前5)
+#     λ=0.70 → 注入命中 68.6%   重复对 0.7%
+#     λ=0.85 → 75.8%            0.8%
+#     λ=0.90 → 77.1% (118/153)  1.1%   ← 取这个（+8.5pt，重复仍可忽略）
+#     λ=1.00 → 77.1%            1.8%   （同分但更易推重复内容）
+#   负样本误召全程 0.00%（0/228），调高 λ 不引入误推
+#   平均注入字数 681 → 819（+20%），换来的是命中率 +8.5pt
+# MMR 的多样性惩罚从 0.30 降到 0.10：语义准度远重于门户去重，
+# 但保留 0.10 而非归零，避免 5 条名额被互近重复内容吃掉。
+MMR_LAMBDA = 0.90
+
+# v4.0 enhanced constants
+IMPORTANCE_PIN_THRESHOLD = 7.0
+ACTIVE_RECENCY_DAYS = 30
+ENTITY_BONUS = 1.5
+TOPIC_BONUS_SAME = 1.2   # 碎片归属当前任务：轻度提升
+TOPIC_BONUS_OTHER = 0.85 # 碎片归属其他任务：降权，防跨任务碎片涌入（2026-09-04 串台修复）
+RECALL_ARCHIVE_TOP_K = 5
+RECALL_ARCHIVE_THRESHOLD = 0.4
+CAUSAL_PROPAGATION_MIN_CONFIDENCE = 0.8
+# 一跳扩散限额：注入 5 条里最多 1 条来自扩散。
+# 链长误差 0.9^n（3 跳 73%、5 跳 59%），不允许放开。
+CAUSAL_PROPAGATION_MAX = 1
+
+# ── 归档碎片召回（2026-10-14 修复，源自克隆体门卫任务）──────────
+# 被 story 吸收的 core 碎片会置 dirty=0 归档。但这类碎片是"事件之后的反思叙事"，
+# 恰恰是用户抱怨"你又忘了"时最该被推的那一类。原实现全链路硬筛 dirty=1，
+# 导致它们结构不可达（离线回放实测占失命中因的 57.5%）。
+# 改为：dirty=1，或 dirty=0 但父 story 仍活着（内容已被上层晶体吸收，非真删除）。
+INCLUDE_ARCHIVED = True
+ARCHIVED_ALIVE_PARENT_SQL = (
+    "{a}.dirty=0 AND {a}.crystal_parent_id IS NOT NULL "
+    "AND EXISTS (SELECT 1 FROM memory_fragments p "
+    "            WHERE p.id = CAST({a}.crystal_parent_id AS INTEGER) "
+    "            AND p.dirty=1)"
+)
+
+
+def _reachable_pred(alias="f"):
+    """召回域谓词：默认含"被活 story 吸收的归档碎片"。"""
+    if INCLUDE_ARCHIVED:
+        return "({a}.dirty=1 OR ({ap}))".format(
+            a=alias, ap=ARCHIVED_ALIVE_PARENT_SQL.format(a=alias))
+    return "{a}.dirty=1".format(a=alias)
+
+
+# 候选池：KNN 预筛条数 = max(top_k × MULT, MIN)。
+# 原为 top_k*4（top_k=15 → 60），实测目标碎片仅 29.6% 落在池内。
+CANDIDATE_POOL_MULT = 20
+CANDIDATE_POOL_MIN = 400
+
+# ── 打分公式（2026-10-14 修复，源自克隆体门卫任务）──────────────
+# 原为六项乘性乘积 + 绝对阈值。实测：recency 有地板 0.3、importance 默认 0.5，
+# 两者都是"恒久下跌因子"（大多数碎片就是 importance=5、就会变老），一律 <1，
+# 把乘积天然压到远低于 1 的量纲，而阈值却是绝对数 0.35。
+# 结果：152/381 条样本 relevance 中位 0.681（高度相关）却算得综合分 0.115，差 5.9 倍。
+# → "越老越忘"不是权重没调好，是数学必然。
+#
+# 改为几何平均 + relevance 主导：rel/rec/imp/wt 都是 <=1 的量，几何平均保持
+# relevance 的量纲，不会因项数多而天然变小。recency/importance 降为微调项。
+# 回退开关：SCORING_MODE = "product"。
+SCORING_MODE = "geo_rel_dominant"   # "product"(旧) | "geo_rel_dominant"(新)
+SCORE_W_RELEVANCE = 0.70
+SCORE_W_RECENCY = 0.10
+SCORE_W_IMPORTANCE = 0.10
+SCORE_W_WEIGHT = 0.10
+SCORE_RECALL_THRESHOLD = 0.50       # geo 模式下的推荐阈值（与 RECALL_THRESHOLD 同为 0.5）
+
+FRAGMENT_MIN_CHARS = 1
+
+
+def _get_db_path():
+    MEMORY_DIR = os.path.dirname(os.path.abspath(__file__))
+    ROOT_DIR = os.path.dirname(MEMORY_DIR)
+    if getattr(sys, 'frozen', False):
+        return os.path.join(os.path.dirname(sys.executable), "data", "chat.db")
+    return os.path.join(ROOT_DIR, "data", "chat.db")
+
+
+SCHEMA_FRAGMENTS = """
+CREATE TABLE IF NOT EXISTS memory_fragments (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    text            TEXT NOT NULL,
+    ts              TEXT NOT NULL,
+    embedding       TEXT NOT NULL DEFAULT '[]',
+    weight          REAL NOT NULL DEFAULT 1.0,
+    recall_count    INTEGER NOT NULL DEFAULT 0,
+    last_recalled   REAL,
+    created_at      REAL NOT NULL,
+    source          TEXT DEFAULT 'reflection',
+    topic_id        TEXT DEFAULT NULL,
+    user_tag        TEXT DEFAULT NULL,
+    parent_id       INTEGER DEFAULT NULL,
+    link_type       TEXT DEFAULT NULL,
+    tags            TEXT DEFAULT '',
+    dirty           INTEGER NOT NULL DEFAULT 1,
+    -- v4.0 L3 enhanced fields
+    importance      REAL NOT NULL DEFAULT 5.0,
+    layer           TEXT NOT NULL DEFAULT 'core',
+    entity_ids      TEXT DEFAULT NULL,
+    summary_hash    TEXT DEFAULT NULL,
+    raw_count       INTEGER NOT NULL DEFAULT 1,
+    epistemic       TEXT NOT NULL DEFAULT 'experience',
+    -- CMN fields (P0): crystal memory network support
+    crystal_parent_id   TEXT DEFAULT NULL,      -- 派生它的上层晶体 id（思维血统）
+    raw_source_id       TEXT DEFAULT NULL,      -- 原始素材 id（文件切片/工具输出原文）
+    authority_level     INTEGER NOT NULL DEFAULT 0,  -- 0=普通, 1=权威
+    confidence_decay    REAL NOT NULL DEFAULT 1.0,  -- 置信度衰减信号 0.0~1.0
+    last_hash_verified_at REAL DEFAULT NULL,    -- 最后一次 hash 验证时间戳
+    node_type           TEXT NOT NULL DEFAULT 'self'  -- 'self'=自传晶体, 'file'=文件晶体
+);
+CREATE INDEX IF NOT EXISTS idx_fragments_weight ON memory_fragments(weight DESC);
+CREATE INDEX IF NOT EXISTS idx_fragments_recalled ON memory_fragments(last_recalled);
+CREATE INDEX IF NOT EXISTS idx_fragments_dirty ON memory_fragments(dirty);
+CREATE INDEX IF NOT EXISTS idx_fragments_layer ON memory_fragments(layer);
+CREATE INDEX IF NOT EXISTS idx_fragments_importance ON memory_fragments(importance DESC);
+CREATE INDEX IF NOT EXISTS idx_fragments_epistemic ON memory_fragments(epistemic);
+CREATE INDEX IF NOT EXISTS idx_fragments_node_type ON memory_fragments(node_type);
+CREATE INDEX IF NOT EXISTS idx_fragments_authority ON memory_fragments(authority_level);
+CREATE INDEX IF NOT EXISTS idx_fragments_crystal_parent ON memory_fragments(crystal_parent_id);
+"""
+
+SCHEMA_ARCHIVE = """
+CREATE TABLE IF NOT EXISTS memory_archive (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    fragment_id     INTEGER NOT NULL,
+    text            TEXT NOT NULL,
+    ts              TEXT NOT NULL,
+    embedding       TEXT NOT NULL DEFAULT '[]',
+    importance      REAL NOT NULL DEFAULT 5.0,
+    entity_ids      TEXT DEFAULT NULL,
+    archived_at     REAL NOT NULL,
+    source          TEXT DEFAULT 'decay'
+);
+CREATE INDEX IF NOT EXISTS idx_archive_entity ON memory_archive(entity_ids);
+CREATE INDEX IF NOT EXISTS idx_archive_ts ON memory_archive(ts);
+CREATE INDEX IF NOT EXISTS idx_archive_importance ON memory_archive(importance DESC);
+CREATE INDEX IF NOT EXISTS idx_archive_fragment ON memory_archive(fragment_id);
+"""
+
+SCHEMA_LINKS = """
+CREATE TABLE IF NOT EXISTS memory_links (
+    from_id     INTEGER NOT NULL,
+    to_id       INTEGER NOT NULL,
+    link_type   TEXT NOT NULL DEFAULT 'similar',
+    weight      REAL NOT NULL DEFAULT 1.0,
+    created_at  REAL NOT NULL,
+    PRIMARY KEY (from_id, to_id),
+    FOREIGN KEY (from_id) REFERENCES memory_fragments(id),
+    FOREIGN KEY (to_id) REFERENCES memory_fragments(id)
+);
+CREATE INDEX IF NOT EXISTS idx_links_from ON memory_links(from_id);
+CREATE INDEX IF NOT EXISTS idx_links_to ON memory_links(to_id);
+"""
+
+SCHEMA_REFLECTION_LOG = """
+CREATE TABLE IF NOT EXISTS memory_reflection_log (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    generated_at    REAL NOT NULL,
+    topic_ids       TEXT,
+    input_chars     INTEGER DEFAULT 0,
+    output_fragments INTEGER DEFAULT 0,
+    cost_usd        REAL DEFAULT 0.0
+);
+"""
+
+FULL_SCHEMA = SCHEMA_FRAGMENTS + SCHEMA_ARCHIVE + SCHEMA_LINKS + SCHEMA_REFLECTION_LOG
+
+
+# ── FragmentStore ──────────────────────────────────
+
+class FragmentStore:
+    def __init__(self, db_path=None):
+        self.db_path = db_path or _get_db_path()
+        self._ensure_schema()
+        # v4.0: sqlite-vec KNN acceleration (graceful fallback to brute-force scan)
+        self.vec_index = VecIndex(self.db_path)
+        self._vec_table = "idx_fragments"
+        self.vec_index.ensure_table(self._vec_table, EMBEDDING_DIM)
+
+    def _ensure_schema(self):
+        conn = sqlite3.connect(self.db_path)
+        try:
+            # Step 1: Create tables (IF NOT EXISTS so existing tables are left alone)
+            # Separate table creation from index creation, because old tables may
+            # not have v4.0 columns that indexes reference.
+            _table_schemas = [
+                "CREATE TABLE IF NOT EXISTS memory_fragments ("
+                "    id              INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "    text            TEXT NOT NULL,"
+                "    ts              TEXT NOT NULL,"
+                "    embedding       TEXT NOT NULL DEFAULT '[]',"
+                "    weight          REAL NOT NULL DEFAULT 1.0,"
+                "    recall_count    INTEGER NOT NULL DEFAULT 0,"
+                "    last_recalled   REAL,"
+                "    created_at      REAL NOT NULL,"
+                "    source          TEXT DEFAULT 'reflection',"
+                "    topic_id        TEXT DEFAULT NULL,"
+                "    user_tag        TEXT DEFAULT NULL,"
+                "    parent_id       INTEGER DEFAULT NULL,"
+                "    link_type       TEXT DEFAULT NULL,"
+                "    tags            TEXT DEFAULT '',"
+                "    dirty           INTEGER NOT NULL DEFAULT 1,"
+
+                "    importance      REAL NOT NULL DEFAULT 5.0,"
+                "    layer           TEXT NOT NULL DEFAULT 'core',"
+                "    entity_ids      TEXT DEFAULT NULL,"
+                "    summary_hash    TEXT DEFAULT NULL,"
+                "    raw_count       INTEGER NOT NULL DEFAULT 1,"
+                "    epistemic       TEXT NOT NULL DEFAULT 'experience',"
+
+                "    crystal_parent_id   TEXT DEFAULT NULL,"
+                "    raw_source_id       TEXT DEFAULT NULL,"
+                "    authority_level     INTEGER NOT NULL DEFAULT 0,"
+                "    confidence_decay    REAL NOT NULL DEFAULT 1.0,"
+                "    last_hash_verified_at REAL DEFAULT NULL,"
+                "    node_type           TEXT NOT NULL DEFAULT 'self'"
+                ");",
+            ]
+            for tbl_sql in _table_schemas:
+                try:
+                    conn.execute(tbl_sql)
+                except sqlite3.OperationalError as e:
+                    print(f"[memory] Table creation warning (may be harmless): {e}")
+
+            # Step 2: Create archive/links/reflection_log tables the same way
+            for tbl_sql in SCHEMA_ARCHIVE.split(";"), SCHEMA_LINKS.split(";"), SCHEMA_REFLECTION_LOG.split(";"):
+                for stmt in tbl_sql:
+                    stmt = stmt.strip()
+                    if stmt and stmt.upper().startswith("CREATE"):
+                        try:
+                            conn.execute(stmt)
+                        except sqlite3.OperationalError as e:
+                            print(f"[memory] Table/index creation warning: {e}")
+
+            # Step 3: Migration — add v4.0 columns if missing (old table)
+            _add_col_if_missing(conn, "memory_fragments", "importance", "REAL NOT NULL DEFAULT 5.0")
+            _add_col_if_missing(conn, "memory_fragments", "layer", "TEXT NOT NULL DEFAULT 'core'")
+            _add_col_if_missing(conn, "memory_fragments", "entity_ids", "TEXT DEFAULT NULL")
+            _add_col_if_missing(conn, "memory_fragments", "summary_hash", "TEXT DEFAULT NULL")
+            _add_col_if_missing(conn, "memory_fragments", "raw_count", "INTEGER NOT NULL DEFAULT 1")
+            _add_col_if_missing(conn, "memory_fragments", "epistemic", "TEXT NOT NULL DEFAULT 'experience'")
+            # Migration: old v3 fields (parent_id, link_type, tags)
+            try:
+                conn.execute("SELECT parent_id FROM memory_fragments LIMIT 1")
+            except sqlite3.OperationalError:
+                conn.execute("ALTER TABLE memory_fragments ADD COLUMN parent_id INTEGER DEFAULT NULL")
+            try:
+                conn.execute("SELECT link_type FROM memory_fragments LIMIT 1")
+            except sqlite3.OperationalError:
+                conn.execute("ALTER TABLE memory_fragments ADD COLUMN link_type TEXT DEFAULT NULL")
+            try:
+                conn.execute("SELECT tags FROM memory_fragments LIMIT 1")
+            except sqlite3.OperationalError:
+                conn.execute("ALTER TABLE memory_fragments ADD COLUMN tags TEXT DEFAULT ''")
+
+            # CMN (P0) Migration — add 6 new fields for crystal memory network
+            _add_col_if_missing(conn, "memory_fragments", "crystal_parent_id", "TEXT DEFAULT NULL")
+            _add_col_if_missing(conn, "memory_fragments", "raw_source_id", "TEXT DEFAULT NULL")
+            _add_col_if_missing(conn, "memory_fragments", "authority_level", "INTEGER NOT NULL DEFAULT 0")
+            _add_col_if_missing(conn, "memory_fragments", "confidence_decay", "REAL NOT NULL DEFAULT 1.0")
+            _add_col_if_missing(conn, "memory_fragments", "last_hash_verified_at", "REAL DEFAULT NULL")
+            _add_col_if_missing(conn, "memory_fragments", "node_type", "TEXT NOT NULL DEFAULT 'self'")
+
+            # CMN (P6) Migration — story 层：叙事记忆的三时间字段 + 素材来源
+            _add_col_if_missing(conn, "memory_fragments", "event_time", "TEXT DEFAULT NULL")
+            _add_col_if_missing(conn, "memory_fragments", "event_span", "TEXT DEFAULT NULL")
+            _add_col_if_missing(conn, "memory_fragments", "source_ids", "TEXT DEFAULT NULL")
+
+            # Step 4: Create indexes (after migration ensures columns exist)
+            _index_schemas = [
+                "CREATE INDEX IF NOT EXISTS idx_fragments_weight ON memory_fragments(weight DESC)",
+                "CREATE INDEX IF NOT EXISTS idx_fragments_recalled ON memory_fragments(last_recalled)",
+                "CREATE INDEX IF NOT EXISTS idx_fragments_dirty ON memory_fragments(dirty)",
+                "CREATE INDEX IF NOT EXISTS idx_fragments_layer ON memory_fragments(layer)",
+                "CREATE INDEX IF NOT EXISTS idx_fragments_importance ON memory_fragments(importance DESC)",
+                "CREATE INDEX IF NOT EXISTS idx_fragments_epistemic ON memory_fragments(epistemic)",
+                # CMN (P0) indexes
+                "CREATE INDEX IF NOT EXISTS idx_fragments_node_type ON memory_fragments(node_type)",
+                "CREATE INDEX IF NOT EXISTS idx_fragments_authority ON memory_fragments(authority_level)",
+                "CREATE INDEX IF NOT EXISTS idx_fragments_crystal_parent ON memory_fragments(crystal_parent_id)",
+            ]
+            for idx_sql in _index_schemas:
+                try:
+                    conn.execute(idx_sql)
+                except sqlite3.OperationalError as e:
+                    print(f"[memory] Index creation warning: {e}")
+
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _conn(self):
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        return conn
+    def add(self, text, ts=None, source="reflection", topic_id=None, user_tag=None, tags="",
+            parent_id=None, link_type=None,
+            importance=5.0, epistemic="experience", entity_ids=None,
+            crystal_parent_id=None, raw_source_id=None,
+            authority_level=0, confidence_decay=1.0,
+            last_hash_verified_at=None, node_type="self", layer="core",
+            event_time=None, event_span=None, source_ids=None):
+        """Add a fragment. Returns fragment id.
+
+        v4.0: supports importance, epistemic, entity_ids.
+        CMN P3: supports crystal_parent_id, raw_source_id, authority_level, confidence_decay,
+                last_hash_verified_at, node_type.
+        CMN P5: supports layer="knowledge" — 成体系知识晶体（AI 主动存的整体理解）。
+                knowledge 层默认 importance≥7.0，算 summary_hash 供查重。
+        CMN P6: supports layer="story" — 叙事记忆（情景记忆，带时间+因果）。
+                story 层默认 importance≥6.5，支持 event_time/event_span/source_ids 三字段。
+        Dedup: exact text → reinforce weight; near-duplicate (sim>0.85) → reinforce.
+        """
+        text = text.strip()
+        if len(text) < FRAGMENT_MIN_CHARS:
+            led_short_circuit(
+                "fragment_store.add", "memory_fragments:-",
+                reason="text_too_short(%d<%d)" % (len(text), FRAGMENT_MIN_CHARS))
+            return None
+        if ts is None:
+            ts = time.strftime("%Y%m%d%H%M%S")
+        now = time.time()
+
+        # knowledge 层：默认 importance 提到 7.0（成体系知识比碎片重要）
+        # story 层：默认 importance 提到 6.5（情景叙事比碎片重要，比 knowledge 略低）
+        # 调用方显式传更高值时尊重调用方
+        if layer == "knowledge" and importance < 7.0:
+            importance = 7.0
+        if layer == "story" and importance < 6.5:
+            importance = 6.5
+
+        new_emb = embed(text)
+        emb_json = json.dumps(new_emb)
+        entity_ids_str = json.dumps(entity_ids or [])
+
+        conn = self._conn()
+        try:
+            # ── Dedup 仅对 core 层生效 ──
+            # knowledge/story 层是成体系记忆，文本天然含素材内容，
+            # 不应被碎片 dedup 拦截（否则 story 会被误判为"相似碎片"而 reinforce 旧记录）
+            if layer == "core":
+                # ── Exact text dedup ──
+                exact = conn.execute(
+                    "SELECT id, weight, importance, raw_count FROM memory_fragments WHERE dirty=1 AND text=?",
+                    (text,)
+                ).fetchone()
+                if exact:
+                    new_weight = min(exact["weight"] + 0.15, WEIGHT_CAP)
+                    new_importance = max(exact["importance"], importance)
+                    new_raw = exact["raw_count"] + 1
+                    conn.execute(
+                        "UPDATE memory_fragments SET weight=?, importance=?, raw_count=?, last_recalled=? WHERE id=?",
+                        (new_weight, new_importance, new_raw, now, exact["id"])
+                    )
+                    conn.commit()
+                    led_short_circuit(
+                        "fragment_store.add", "memory_fragments:%s" % exact["id"],
+                        reason="exact_dup", extra={"action": "reinforce"})
+                    return exact["id"]
+
+                # Check for near-duplicates
+                # 只和「活着」的碎片合并：dirty=0 是软删（forget/clear 之后的状态），
+                # 曾经把「最近一小时被删掉的」也算进候选，结果刚记住的内容被并进一条
+                # 已删除的行里——接口回 success、召回却永远看不到（2026-11-14 修）。
+                existing = conn.execute(
+                    "SELECT id, text, embedding, weight, importance, entity_ids FROM memory_fragments"
+                    " WHERE dirty=1"
+                ).fetchall()
+
+                best_id, best_sim = None, 0.0
+                for row in existing:
+                    old_emb = json.loads(row["embedding"])
+                    if not old_emb or len(old_emb) == 0:
+                        continue
+                    sim = cosine_sim(new_emb, old_emb)
+                    if sim > best_sim:
+                        best_sim = sim
+                        best_id = row["id"]
+
+                if best_sim > 0.85:
+                    best_row = conn.execute(
+                        "SELECT weight, importance, raw_count FROM memory_fragments WHERE id=?", (best_id,)
+                    ).fetchone()
+                    if best_row:
+                        new_weight = min(best_row["weight"] + WEIGHT_REINFORCE, WEIGHT_CAP)
+                        new_importance = max(best_row["importance"], importance)
+                        new_raw = best_row["raw_count"] + 1
+                        conn.execute(
+                            "UPDATE memory_fragments SET weight=?, importance=?, raw_count=?, last_recalled=? WHERE id=?",
+                            (new_weight, new_importance, new_raw, now, best_id)
+                        )
+                    conn.commit()
+                    led_short_circuit(
+                        "fragment_store.add", "memory_fragments:%s" % best_id,
+                        reason="near_dup(sim=%.3f)" % best_sim,
+                        extra={"action": "reinforce"})
+                    return best_id
+
+            # parent_id / link_type（core 层才走相似关联，knowledge/story 层直接 INSERT）
+            if parent_id is None and layer == "core":
+                if best_sim > 0.70:
+                    row = conn.execute("SELECT weight FROM memory_fragments WHERE id=?", (best_id,)).fetchone()
+                    if row:
+                        new_w = min(row["weight"] + WEIGHT_BOOST, WEIGHT_CAP)
+                        conn.execute("UPDATE memory_fragments SET weight=? WHERE id=?", (new_w, best_id))
+                    parent_id = best_id
+                    link_type = "causal" if source == "causal" else "similar"
+
+            # Insert
+            # knowledge 层算 summary_hash 供查重（hash 寻址，AI 无感）
+            summary_hash = None
+            if layer == "knowledge":
+                import hashlib
+                summary_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+            # story 层：source_ids 序列化为 JSON
+            source_ids_str = json.dumps(source_ids) if source_ids else None
+
+            cur = conn.execute(
+                """INSERT INTO memory_fragments
+                   (text, ts, embedding, weight, recall_count, last_recalled, created_at,
+                    source, topic_id, user_tag, parent_id, link_type, tags,
+                    importance, layer, entity_ids, summary_hash, raw_count, epistemic,
+                    crystal_parent_id, raw_source_id, authority_level, confidence_decay,
+                    last_hash_verified_at, node_type,
+                    event_time, event_span, source_ids)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (text, ts, emb_json, WEIGHT_DEFAULT, 0, None, now,
+                 source, topic_id, user_tag, parent_id, link_type, tags,
+                 importance, layer, entity_ids_str, summary_hash, 1, epistemic,
+                 crystal_parent_id, raw_source_id, authority_level, confidence_decay,
+                 last_hash_verified_at, node_type,
+                 event_time, event_span, source_ids_str)
+            )
+            new_id = cur.lastrowid
+
+            # Create link in graph table
+            if parent_id and new_id:
+                conn.execute(
+                    """INSERT OR IGNORE INTO memory_links (from_id, to_id, link_type, weight, created_at)
+                       VALUES (?,?,?,?,?)""",
+                    (parent_id, new_id, link_type, best_sim, now)
+                )
+                conn.execute(
+                    """INSERT OR IGNORE INTO memory_links (from_id, to_id, link_type, weight, created_at)
+                       VALUES (?,?,?,?,?)""",
+                    (new_id, parent_id, "reverse", best_sim, now)
+                )
+            conn.commit()
+
+            # v4.0: sync to vec_index for KNN acceleration
+            # 注意：必须在 conn.commit() 之后写 vec 索引！vec_index 内部用独立连接，
+            # 若在主事务未提交时写入 idx_fragments，两连接互相等锁 → database is locked 死锁。
+            # vec 索引可随时 rebuild，失败只影响 KNN 加速，不影响主数据写入。
+            if new_emb and len(new_emb) > 0:
+                try:
+                    self.vec_index.insert(self._vec_table, new_id, new_emb)
+                except Exception as e:
+                    # 原实现只 print 一句 —— 索引静默失效，账本把它记成独立事件
+                    print(f"[memory] vec_index sync skipped: {e}")
+                    led_error(
+                        "fragment_store.add", "idx_%s:%s" % (self._vec_table, new_id),
+                        reason="vec_index_sync_failed: %s" % e,
+                        extra={"main_write": "ok", "impact": "KNN-only"})
+
+            # ── 主写入 committed：写后读回验证，不靠"看起来成功了"──
+            verify = "unverified"
+            try:
+                chk = conn.execute(
+                    "SELECT id, length(text) AS n FROM memory_fragments WHERE id=?", (new_id,)
+                ).fetchone()
+                if chk and chk["id"] == new_id and chk["n"] and chk["n"] > 0:
+                    verify = "read_back:ok(len=%d)" % chk["n"]
+                else:
+                    verify = "read_back:MISMATCH"
+            except Exception as e:
+                verify = "read_back:err(%s)" % e
+            led_committed(
+                "fragment_store.add", "memory_fragments:%s" % new_id,
+                verify=verify, extra={"layer": layer, "source": source})
+
+            return new_id
+        except Exception as _e:
+            # v2：主写入链路的任何失败都必须留痕（原来 INSERT/UPDATE 失败完全静默）
+            led_error(
+                "fragment_store.add", "memory_fragments:-",
+                reason="main_write_failed: %s: %s" % (type(_e).__name__, _e),
+                extra={"layer": layer, "source": source})
+            raise
+        finally:
+            conn.close()
+
+    def recall(self, context_text, top_k=RECALL_TOP_K, threshold=RECALL_THRESHOLD,
+               query_entities=None, layer="core", topic_id=None, current_topic=None):
+        """v4.0: 5-factor recall with entity match bonus.
+
+        Factors: recency × relevance × importance × weight × entity_match.
+        MMR dedup (λ=0.7).
+        When entity_ids hit, also propagates causal edges one hop (confidence ≥ 0.8).
+        Returns list of fragment dicts.
+        """
+        if not context_text or not context_text.strip():
+            return self._anchors(3, layer=layer)
+
+        ctx_emb = embed(context_text)
+        if not ctx_emb or all(v == 0 for v in ctx_emb):
+            return self._anchors(top_k, layer=layer)
+
+        conn = self._conn()
+        try:
+            now = time.time()
+            rows = self._fetch_candidates(conn, ctx_emb, top_k, layer, topic_id)
+
+            scored = []
+            for row in rows:
+                emb = json.loads(row["embedding"])
+                if not emb or len(emb) == 0:
+                    continue
+                relevance = cosine_sim(ctx_emb, emb)
+                # relevance 硬门槛：低于此值直接淘汰，importance/weight 救不回来
+                # 这是防"元晶体霸榜"的关键——元晶体因结构化文本 embedding 跟任何查询都
+                # 有点相似（0.1-0.3），但实际不相关，靠 importance=7/weight=3 综合分顶上来
+                if relevance < RELEVANCE_HARD_FLOOR:
+                    continue
+
+                # 5-factor scoring
+                score = self._five_factor_score(
+                    row, relevance, now, query_entities=query_entities,
+                    current_topic=current_topic
+                )
+                if score >= threshold:
+                    frag = dict(row)
+                    frag["_relevance"] = relevance  # 存真 cosine，供 MMR 和下游用
+                    scored.append((frag, score))
+
+            scored.sort(key=lambda x: x[1], reverse=True)
+
+            # MMR selection
+            selected = self._mmr_select(scored, top_k, conn, now)
+
+            # ── Causal propagation: one hop from selected fragments ──
+            # 2026-10-15 统一边库：不再要求 query_entities（那是入口进不来的旧锁），
+            # 锚点直接用已选碎片 id；限额 CAUSAL_PROPAGATION_MAX 条。
+            causal_neighbors = self._fetch_causal_neighbors(
+                selected, query_entities, conn, ctx_emb=ctx_emb)
+            if causal_neighbors:
+                selected.extend(causal_neighbors)
+                # Re-dedup by id
+                seen_ids = set()
+                deduped = []
+                for f in selected:
+                    if f["id"] not in seen_ids:
+                        seen_ids.add(f["id"])
+                        deduped.append(f)
+                selected = deduped[:top_k + CAUSAL_PROPAGATION_MAX]
+
+            conn.commit()
+            return selected
+        finally:
+            conn.close()
+
+    def recall_guaranteed(self, exclude_ids=None, cap=2):
+        """权威知识保底召回：layer=knowledge 且 authority_level>=1 的行为准则类记忆。
+        这类"永远该在场"的教训（如回复风格、验证纪律）不能赌语义召回——
+        用户间接表达时（如'你明白了吗'暗示啰嗦）向量相似度过不了硬门槛。
+        按 weight*importance 排序，候选间用 embedding 余弦去重（同一教训的
+        多个变体只取分最高的一条），避免保底名额被同主题重复占用。"""
+        if exclude_ids is None:
+            exclude_ids = set()
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM memory_fragments "
+                "WHERE layer='knowledge' AND authority_level>=1 "
+                "ORDER BY (weight * importance) DESC LIMIT 20"
+            ).fetchall()
+            out, out_embs = [], []
+            for row in rows:
+                d = dict(row)
+                emb = None
+                try:
+                    emb = json.loads(d.get("embedding") or "[]")
+                except Exception:
+                    pass
+                d.pop("embedding", None)
+                if d.get("id") in exclude_ids:
+                    continue
+                # 与已选条目近似去重（cos>0.70 视为同一教训家族：
+                # 实测验证家族内部 0.72-0.87，跨主题 0.60-0.65）
+                if emb and any(cosine_sim(emb, e) > 0.70 for e in out_embs):
+                    continue
+                out.append(d)
+                if emb:
+                    out_embs.append(emb)
+                if len(out) >= cap:
+                    break
+            return out
+        finally:
+            conn.close()
+
+    def _fetch_candidates(self, conn, ctx_emb, top_k, layer, topic_id):
+        """用 vec_index KNN 预筛候选碎片；不可用时回退全表扫描。
+
+        候选池 = max(top_k × CANDIDATE_POOL_MULT, CANDIDATE_POOL_MIN)
+        （原为 top_k*4=60，实测目标碎片仅 29.6% 在池内，是失命中首要瓶颈）。
+        再从 memory_fragments 拉详情。五因子打分仍用 Python 端 cosine_sim
+        重算 relevance，保证评分一致性。
+
+        召回域 = dirty=1，或 dirty=0 但被活 story 吸收（INCLUDE_ARCHIVED，2026-10-14）。
+
+        layer='core' 时自动包含 knowledge 层（成体系知识自然浮出，AI 无感）。
+        """
+        # core 层查询自动带上 knowledge + story 层（成体系知识和叙事自然浮出，AI 无感）
+        layers = ("core", "knowledge", "story") if layer == "core" else (layer,)
+        layer_ph = ",".join("?" for _ in layers)
+        reach = _reachable_pred("f")
+        pool = max(top_k * CANDIDATE_POOL_MULT, CANDIDATE_POOL_MIN)
+
+        if self.vec_index.is_available():
+            knn = self.vec_index.query(self._vec_table, ctx_emb, top_k=pool)
+            if knn:
+                rowids = [r["rowid"] for r in knn]
+                # 分块查询：SQLite 变量上限 32766，池子可能上千
+                out = []
+                for i in range(0, len(rowids), 5000):
+                    chunk = rowids[i:i + 5000]
+                    placeholders = ",".join("?" for _ in chunk)
+                    where = (f"f.id IN ({placeholders}) AND {reach} "
+                             f"AND f.layer IN ({layer_ph})")
+                    params = chunk + list(layers)
+                    if topic_id:
+                        where += " AND (f.topic_id=? OR f.topic_id IS NULL)"
+                        params.append(topic_id)
+                    out.extend(conn.execute(
+                        f"SELECT * FROM memory_fragments f WHERE {where}", params
+                    ).fetchall())
+                if out:
+                    return out
+        # 回退：全表扫描
+        params = list(layers)
+        where_clauses = [reach, f"f.layer IN ({layer_ph})"]
+        if topic_id:
+            where_clauses.append("(f.topic_id=? OR f.topic_id IS NULL)")
+            params.append(topic_id)
+        return conn.execute(
+            "SELECT * FROM memory_fragments f WHERE " + " AND ".join(where_clauses), params
+        ).fetchall()
+
+    def rebuild_index(self):
+        """重建 vec_index。用于已有数据迁移或维度变更。返回入库条数。"""
+        if not self.vec_index.is_available():
+            return 0
+        conn = self._conn()
+        try:
+            # sqlite-vec 的 vec0 不支持 INSERT OR REPLACE（唯一约束直接报错），
+            # 也不保证无 WHERE 的 DELETE 能清空 shadow tables → 用 DROP 重建最干净。
+            try:
+                conn.execute(f"DROP TABLE IF EXISTS {self._vec_table}")
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute(
+                    f"""CREATE VIRTUAL TABLE IF NOT EXISTS {self._vec_table}
+                        USING vec0(embedding FLOAT[{EMBEDDING_DIM}] distance_metric=cosine)"""
+                )
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass
+            rows = conn.execute(
+                "SELECT f.id, f.embedding FROM memory_fragments f WHERE " + _reachable_pred("f")
+            ).fetchall()
+            count = 0
+            batch = []
+            for r in rows:
+                try:
+                    emb = json.loads(r["embedding"])
+                except Exception:
+                    continue
+                # 维度守卫：库里残留旧代模型向量（256 维），直接入索引会 Dimension mismatch
+                if emb and len(emb) == EMBEDDING_DIM:
+                    batch.append((r["id"], emb))
+            # 批量插入：单条 insert 每行新开连接，重建上万条会超时
+            if batch:
+                count = self.vec_index.insert_many(self._vec_table, batch)
+            return count
+        finally:
+            conn.close()
+
+    def _five_factor_score(self, row, relevance, now, query_entities=None,
+                           current_topic=None):
+        """recency × relevance × importance × weight × entity_bonus × topic_bonus."""
+        # 1. Recency
+        created_at = row["created_at"]
+        age_days = (now - created_at) / 86400.0
+        recency = max(0.5 ** (age_days / DECAY_HALF_LIFE_DAYS), DECAY_FLOOR)
+
+        # 2. Relevance (already computed)
+
+        # 3. Importance (1-10 → 0.1-1.0)
+        importance = row["importance"] / 10.0
+
+        # 4. Weight (with raw_count correction)
+        weight = row["weight"] * (1 + 0.1 * min(row["raw_count"], 10))
+
+        # 5. Entity match bonus
+        entity_bonus = 1.0
+        if query_entities:
+            frag_entities = json.loads(row["entity_ids"] or "[]")
+            if frag_entities and any(eid in frag_entities for eid in query_entities):
+                entity_bonus = ENTITY_BONUS
+
+        # 6. Topic match（任务感知，2026-09-04 串台修复）
+        # 归属当前任务 ×1.2；无归属（老数据）×1.0 不动；其他任务 ×0.85 降权
+        # 1.5×0.85=1.275>1.0：实体强证据的跨任务碎片仍高于无实体命中者，不误伤真相关
+        if current_topic:
+            frag_topic = row["topic_id"] or ""
+            if frag_topic == current_topic:
+                topic_bonus = TOPIC_BONUS_SAME
+            elif frag_topic:
+                topic_bonus = TOPIC_BONUS_OTHER
+            else:
+                topic_bonus = 1.0
+        else:
+            topic_bonus = 1.0
+
+        if SCORING_MODE == "geo_rel_dominant":
+            # 几何平均 + relevance 主导：保持量纲，不让恒久下跌因子把分数压死
+            score = ((max(relevance, 1e-9) ** SCORE_W_RELEVANCE)
+                     * (max(recency, 1e-9) ** SCORE_W_RECENCY)
+                     * (max(importance, 1e-9) ** SCORE_W_IMPORTANCE)
+                     * (max(weight, 1e-9) ** SCORE_W_WEIGHT)
+                     * entity_bonus * topic_bonus)
+            return score
+
+        return recency * relevance * importance * weight * entity_bonus * topic_bonus
+
+    def _mmr_select(self, scored, top_k, conn=None, now=None):
+        """MMR (Maximal Marginal Relevance) selection.
+
+        scored: [(fragment_dict, score), ...]  fragment 内含 _relevance（真 cosine）
+
+        性能注记（2026-10-14）：原实现内层对每个候选都重新 json.loads 已选条目与
+        候选的 embedding，候选池从 60 拉到 400 后变成 O(top_k × N × 已选) 次解析
+        + 纯 Python cosine，实测单次 recall 要 6-12s（rebuild 才 0.3s）。
+        改为：预解析所有候选向量成 numpy 数组 + 矩阵运算取 max_dup。
+        """
+        import numpy as _np
+
+        if not scored:
+            return []
+        # 预解析：id、relevance、向量
+        ids, rels, vecs = [], [], []
+        for f, score in scored:
+            try:
+                v = json.loads(f.get("embedding") or "[]")
+            except Exception:
+                v = []
+            ids.append(f["id"])
+            rels.append(f.get("_relevance", score))
+            if v:
+                a = _np.asarray(v, dtype=_np.float32)
+                n = float(_np.linalg.norm(a))
+                vecs.append(a / n if n > 0 else a)
+            else:
+                vecs.append(None)
+        rels = _np.asarray(rels, dtype=_np.float32)
+        valid = [i for i, v in enumerate(vecs) if v is not None]
+        if valid:
+            mat = _np.vstack([vecs[i] for i in valid])   # 归一化后 cosine = 点积
+        else:
+            mat = None
+        valid_pos = {vi: k for k, vi in enumerate(valid)}
+
+        selected, sel_mask = [], []
+        for _ in range(top_k):
+            if mat is not None and sel_mask:
+                dup = mat @ mat[sel_mask].T                    # (N, n_sel)
+                max_dup = dup.max(axis=1)
+            else:
+                max_dup = _np.zeros(len(ids), dtype=_np.float32)
+            mmr = MMR_LAMBDA * rels - (1 - MMR_LAMBDA) * max_dup
+            if selected:
+                mmr[sel_mask] = -1.0                        # 已选的不再选
+            k = int(_np.argmax(mmr))
+            if mmr[k] < -0.5:
+                break
+            f = scored[k][0]
+            # 字段清晰化：
+            # - relevance: 真 cosine 相似度（0~1）
+            # - score: 综合分（recency × relevance × importance × weight × entity）
+            # - similarity: 已废弃（曾误导下游以为是 cosine）
+            f["relevance"] = f.get("_relevance", 0.0)
+            f["score"] = float(mmr[k])
+            f.pop("similarity", None)  # 清除旧误导字段
+            f.pop("_relevance", None)  # 清理临时字段
+            selected.append(f)
+            rels[k] = -1e9                       # 排除已选
+            if k in valid_pos:
+                sel_mask.append(valid_pos[k])
+            if conn and now is not None:
+                conn.execute(
+                    "UPDATE memory_fragments SET recall_count=recall_count+1, last_recalled=? WHERE id=?",
+                    (now, f["id"])
+                )
+        return selected
+
+    def _fetch_causal_neighbors(self, selected, query_entities, conn,
+                                limit=None, min_weight=None, ctx_emb=None):
+        """Follow causal edges one hop from already-selected fragments.
+
+        ── 2026-10-15 统一边库改造 ──────────────────────────────
+        真因果边写在 memory_links（link_type IN ('cause','causal')），
+        而旧实现读 memory_relations.edge_type='causal'——那张表实测 0 条，
+        函数恒返回 []，而补 query_entities 也救不了（读的表本身就是空的）。
+
+        两处修正：
+          ① 数据源改 memory_links（真边在这：cause 228 + causal 128）
+          ② 遍历锚点改用"已选碎片的 id"，不再依赖 query_entities 是否被上游传入
+             （旧锁：server.py 不传 query_entities，入口根本进不来）
+
+        边按无向处理（写入侧 PRIMARY KEY(from_id,to_id) 只存单向）。
+        限额 limit（默认 CAUSAL_PROPAGATION_MAX=1）：链长误差 0.9^n 不允许放开。
+        """
+        if limit is None:
+            limit = CAUSAL_PROPAGATION_MAX
+        if min_weight is None:
+            min_weight = CAUSAL_PROPAGATION_MIN_CONFIDENCE
+        if not selected or limit <= 0:
+            return []
+        try:
+            selected_ids = [f["id"] for f in selected if f.get("id") is not None]
+            if not selected_ids:
+                return []
+            ph = ",".join("?" for _ in selected_ids)
+            rows = conn.execute(
+                """SELECT from_id, to_id, weight FROM memory_links
+                   WHERE link_type IN ('cause','causal')
+                       AND weight >= ?
+                       AND (from_id IN ({ph}) OR to_id IN ({ph}))
+                   ORDER BY weight DESC
+                   LIMIT 40""".format(ph=ph),
+                [min_weight] + selected_ids + selected_ids
+            ).fetchall()
+            if not rows:
+                return []
+
+            anchors = set(selected_ids)
+            best = {}
+            for r in rows:
+                a, b = r["from_id"], r["to_id"]
+                other = b if a in anchors else a
+                if other in anchors or other is None:
+                    continue
+                w = float(r["weight"] or 0.0)
+                if w > best.get(other, 0.0):
+                    best[other] = w
+            if not best:
+                return []
+
+            reach = _reachable_pred("f")
+            result = []
+            seen = set(selected_ids)
+            for nid, w in sorted(best.items(), key=lambda kv: kv[1], reverse=True):
+                if nid in seen:
+                    continue
+                row = conn.execute(
+                    """SELECT f.* FROM memory_fragments f
+                       WHERE f.id = ?
+                           AND f.layer IN ('core','knowledge','story')
+                           AND """ + reach,
+                    (nid,)
+                ).fetchone()
+                if not row:
+                    continue
+                d = dict(row)
+                d["_causal_score"] = w
+                d["_causal_propagation"] = True
+                # 补 relevance：注入层 _score 由 rel^0.70 主导，不给的话
+                # 扩散出来的邻居会被算成 ~0 分，在最后一步被扔掉（边白修）。
+                # 用邻居自己的 embedding 跟原查询算真 cosine，不借用锚点的分数。
+                try:
+                    _nemb = json.loads(d.get("embedding") or "[]")
+                    if ctx_emb and _nemb:
+                        d["relevance"] = cosine_sim(ctx_emb, _nemb)
+                except Exception:
+                    pass
+                result.append(d)
+                seen.add(nid)
+                if len(result) >= limit:
+                    break
+            return result
+        except Exception:
+            return []
+
+
+    def recall_archive(self, context_text, top_k=RECALL_ARCHIVE_TOP_K,
+                       threshold=RECALL_ARCHIVE_THRESHOLD):
+        """Recall from archive layer. If hit with importance ≥ 7, reactivate to core."""
+        if not context_text or not context_text.strip():
+            return []
+
+        ctx_emb = embed(context_text)
+        if not ctx_emb or all(v == 0 for v in ctx_emb):
+            return []
+
+        conn = self._conn()
+        try:
+            now = time.time()
+            rows = conn.execute(
+                "SELECT * FROM memory_archive"
+            ).fetchall()
+
+            scored = []
+            for row in rows:
+                emb = json.loads(row["embedding"])
+                if not emb or len(emb) == 0:
+                    continue
+                sim = cosine_sim(ctx_emb, emb)
+                score = sim * (row["importance"] / 10.0)
+                if score >= threshold:
+                    scored.append((dict(row), score))
+
+            scored.sort(key=lambda x: x[1], reverse=True)
+            top = scored[:top_k]
+
+            # Activate back to core if importance ≥ pin threshold
+            activated = []
+            for entry, score in top:
+                if entry["importance"] >= IMPORTANCE_PIN_THRESHOLD:
+                    # Check not already in core
+                    existing = conn.execute(
+                        "SELECT id FROM memory_fragments WHERE dirty=1 AND text=? AND layer='core'",
+                        (entry["text"],)
+                    ).fetchone()
+                    if not existing:
+                        cur = conn.execute(
+                            """INSERT INTO memory_fragments
+                               (text, ts, embedding, weight, importance, layer, entity_ids,
+                                raw_count, epistemic, created_at, source)
+                               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                            (entry["text"], entry["ts"], entry["embedding"],
+                             WEIGHT_DEFAULT, entry["importance"], "core",
+                             entry["entity_ids"], 1, "experience", now, "archive_reactivated")
+                        )
+                        activated.append(cur.lastrowid)
+            conn.commit()
+            return [dict(e[0]) for e in top]
+        finally:
+            conn.close()
+
+    def move_to_archive(self, fragment_id):
+        """Move a fragment from core layer to archive layer."""
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "SELECT * FROM memory_fragments WHERE id=? AND dirty=1",
+                (fragment_id,)
+            ).fetchone()
+            if not row:
+                return False
+            now = time.time()
+            conn.execute(
+                """INSERT INTO memory_archive
+                   (fragment_id, text, ts, embedding, importance, entity_ids, archived_at, source)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (row["id"], row["text"], row["ts"], row["embedding"],
+                 row["importance"], row["entity_ids"], now, "decay")
+            )
+            # Mark as archival layer (not deleted)
+            conn.execute(
+                "UPDATE memory_fragments SET layer='archival', last_recalled=? WHERE id=?",
+                (now, fragment_id)
+            )
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+    def move_to_core(self, fragment_id):
+        """Reactivate an archival fragment back to core."""
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "SELECT * FROM memory_fragments WHERE id=? AND dirty=1",
+                (fragment_id,)
+            ).fetchone()
+            if not row:
+                return False
+            conn.execute(
+                "UPDATE memory_fragments SET layer='core', weight=? WHERE id=?",
+                (WEIGHT_DEFAULT, fragment_id)
+            )
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+    def prune(self):
+        """v4.0: No hard cap. Bidirectional core↔archival migration.
+
+        - Core fragments: 30 days no recall + importance < 7 → archive
+        - Archive fragments: never deleted
+        - Entities: deactivation handled by entity_store separately
+        Returns count of migrated fragments.
+        """
+        conn = self._conn()
+        try:
+            now = time.time()
+            migrated = 0
+
+            # Core → archival: 30 days no recall + importance < pin threshold
+            stale_core = conn.execute(
+                """SELECT id, importance, last_recalled, created_at
+                   FROM memory_fragments
+                   WHERE dirty=1 AND layer='core'"""
+            ).fetchall()
+
+            for row in stale_core:
+                last_touch = max(row["last_recalled"] or 0, row["created_at"])
+                age_days = (now - last_touch) / 86400.0
+                if age_days > ACTIVE_RECENCY_DAYS and row["importance"] < IMPORTANCE_PIN_THRESHOLD:
+                    self.move_to_archive(row["id"])
+                    migrated += 1
+
+            conn.commit()
+            return migrated
+        finally:
+            conn.close()
+
+    def _anchors(self, n=3, layer="core"):
+        """Get top-n highest-weight fragments (identity anchors)."""
+        # core 层包含 knowledge + story 层（同 _fetch_candidates 逻辑）
+        layers = ("core", "knowledge", "story") if layer == "core" else (layer,)
+        layer_ph = ",".join("?" for _ in layers)
+        conn = self._conn()
+        try:
+            now = time.time()
+            cutoff = now - 30 * 86400
+            rows = conn.execute(
+                f"""SELECT * FROM memory_fragments
+                   WHERE dirty=1 AND layer IN ({layer_ph}) AND created_at > ?
+                   ORDER BY weight DESC LIMIT ?""",
+                list(layers) + [cutoff, n]
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    # ── Backward compat: v3 methods ─────────────────
+
+    def recall_by_topic(self, topic_id, limit=10):
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM memory_fragments WHERE dirty=1 AND topic_id=? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (topic_id, limit)
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def get_latest_fragment_id(self, topic_id):
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "SELECT id FROM memory_fragments WHERE dirty=1 AND topic_id=? "
+                "ORDER BY created_at DESC LIMIT 1",
+                (topic_id,)
+            ).fetchone()
+            return row["id"] if row else None
+        finally:
+            conn.close()
+
+    def _effective_weight(self, weight, created_at, now):
+        age_days = (now - created_at) / 86400.0
+        decay = 0.5 ** (age_days / DECAY_HALF_LIFE_DAYS)
+        return max(weight * decay, DECAY_FLOOR * weight)
+
+    def reinforce(self, keyword, boost=0.5, cap=5.0):
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT id, text, weight FROM memory_fragments WHERE dirty=1 AND text LIKE ?",
+                (f"%{keyword}%",)
+            ).fetchall()
+            count = 0
+            for row in rows:
+                new_w = min(row["weight"] + boost, cap)
+                conn.execute("UPDATE memory_fragments SET weight=? WHERE id=?", (new_w, row["id"]))
+                count += 1
+            conn.commit()
+            return count
+        finally:
+            conn.close()
+
+    # ── CMN P3/P4: 晶体字段管理 ───────────────────────
+
+    def update_cmn_fields(self, fragment_id, **kwargs):
+        """更新晶体的 CMN 字段。
+
+        供反思回路（P4）提拔权威、衰减置信度等使用。
+        支持的字段：authority_level, confidence_decay, last_hash_verified_at,
+                   crystal_parent_id, raw_source_id, node_type。
+
+        安全约束：AI 工具不能直接调此方法设 authority_level=1，
+        只能通过反思回路（P4）的提拔逻辑间接设。
+        """
+        allowed = {"authority_level", "confidence_decay", "last_hash_verified_at",
+                   "crystal_parent_id", "raw_source_id", "node_type"}
+        updates = []
+        vals = []
+        for k, v in kwargs.items():
+            if k in allowed:
+                updates.append(f"{k}=?")
+                vals.append(v)
+        if not updates:
+            return False
+        vals.append(time.time())  # updated_at
+        updates.append("last_recalled=?")
+        # last_recalled 不该被这里改，改回 created_at 逻辑——其实用 last_recalled 作"最后访问"也行
+        # 修正：只更新 updated_at 风格，加个 updated_at 字段更新
+        updates[-1] = "last_recalled=?"
+        # 简化：用 last_recalled 兼容（表里没 updated_at）
+        vals[-1] = time.time()
+        vals.append(fragment_id)
+        conn = self._conn()
+        try:
+            conn.execute(
+                f"UPDATE memory_fragments SET {', '.join(updates)} WHERE id=?",
+                vals
+            )
+            conn.commit()
+            return True
+        except Exception:
+            return False
+        finally:
+            conn.close()
+
+    def promote_to_authority(self, fragment_id) -> bool:
+        """将普通晶体提拔为权威晶体（P4 反思回路调用）。"""
+        return self.update_cmn_fields(fragment_id, authority_level=1)
+
+    def link_cores_to_knowledge(self, knowledge_id: int, topic_tag: str = None,
+                                 limit: int = 15) -> int:
+        """把同主题的 core 碎片关联到 knowledge 晶体（建立血统）。
+
+        匹配策略（OR，取并集）：
+        1. entity_ids 有重叠（强信号，实体共现）
+        2. embedding 语义相似度 ≥ 0.72（强信号，主题真正相关）
+        3. tags 精确包含（兜底）
+
+        注：中文 embedding 基线相似度高（无关内容也常 0.55+），
+        阈值必须够高（0.72）才能筛出真相关的，否则全是噪声。
+        tags 匹配也常失效——AI 存 knowledge 填"主题"（长词），
+        存 core 填"标签"（短词），语义不对齐。
+
+        只关联 layer='core' 且 crystal_parent_id 为空的碎片（不覆盖已有血统）。
+        返回关联条数。
+        """
+        conn = self._conn()
+        try:
+            now = time.time()
+            count = 0
+
+            # 取 knowledge 晶体
+            krow = conn.execute(
+                "SELECT id, text, embedding, entity_ids, tags FROM memory_fragments "
+                "WHERE id=? AND layer='knowledge'",
+                (knowledge_id,)
+            ).fetchone()
+            if not krow:
+                return 0
+
+            matched_ids = set()
+
+            # 策略1：entity_ids 重叠（最强信号）
+            try:
+                k_entities = set(json.loads(krow["entity_ids"] or "[]"))
+            except Exception:
+                k_entities = set()
+            if k_entities:
+                rows = conn.execute(
+                    """SELECT id, entity_ids FROM memory_fragments
+                        WHERE layer='core' AND dirty=1
+                        AND crystal_parent_id IS NULL
+                        AND entity_ids IS NOT NULL"""
+                ).fetchall()
+                for r in rows:
+                    try:
+                        r_entities = set(json.loads(r["entity_ids"] or "[]"))
+                    except Exception:
+                        continue
+                    if r_entities & k_entities:
+                        matched_ids.add(r["id"])
+
+            # 策略2：embedding 语义相似（主路径）
+            try:
+                from .embedder import cosine_sim
+                k_emb = json.loads(krow["embedding"] or "[]")
+                if k_emb and len(k_emb) > 0:
+                    rows = conn.execute(
+                        """SELECT id, embedding FROM memory_fragments
+                           WHERE layer='core' AND dirty=1
+                           AND crystal_parent_id IS NULL
+                           AND embedding IS NOT NULL
+                           AND embedding != '[]'"""
+                    ).fetchall()
+                    for r in rows:
+                        if r["id"] in matched_ids:
+                            continue
+                        try:
+                            r_emb = json.loads(r["embedding"] or "[]")
+                        except Exception:
+                            continue
+                        if not r_emb or len(r_emb) == 0:
+                            continue
+                        sim = cosine_sim(k_emb, r_emb)
+                        if sim >= 0.72:
+                            matched_ids.add(r["id"])
+            except Exception as e:
+                print(f"[memory] link_cores embedding match skipped: {e}")
+
+            # 策略3：tags 精确匹配（兜底）
+            if topic_tag:
+                rows = conn.execute(
+                    """SELECT id FROM memory_fragments
+                       WHERE layer='core' AND dirty=1
+                       AND crystal_parent_id IS NULL
+                       AND (tags LIKE ? OR tags LIKE ? OR tags LIKE ?)""",
+                    (topic_tag, f"{topic_tag},%", f"%,{topic_tag}")
+                ).fetchall()
+                matched_ids.update(r["id"] for r in rows)
+
+            # 限制条数（避免一个 knowledge 关联太多）
+            matched_ids = list(matched_ids)[:limit]
+
+            # 批量更新
+            for fid in matched_ids:
+                conn.execute(
+                    "UPDATE memory_fragments SET crystal_parent_id=?, last_recalled=? WHERE id=?",
+                    (str(knowledge_id), now, fid)
+                )
+                count += 1
+
+            conn.commit()
+            return count
+        finally:
+            conn.close()
+
+    def link_materials(self, story_id: int, source_ids: list) -> int:
+        """把素材碎片关联到 story 并归档（P6 叙事沉淀用）。
+
+        更新碎片的 crystal_parent_id 指向 story，同时 dirty=0 归档——
+        碎片不再参与常规召回（recall/search_by_text/get_chain 默认 dirty=1），
+        但仍保留在 memory_fragments 表里，trace_memory 主动追溯时可调出。
+        返回归档条数。
+        """
+        if not source_ids:
+            return 0
+        conn = self._conn()
+        try:
+            now = time.time()
+            count = 0
+            for fid in source_ids:
+                cur = conn.execute(
+                    "UPDATE memory_fragments SET crystal_parent_id=?, dirty=0, last_recalled=? "
+                    "WHERE id=? AND layer='core' AND dirty=1",
+                    (str(story_id), now, fid)
+                )
+                count += cur.rowcount
+            conn.commit()
+            return count
+        finally:
+            conn.close()
+
+    def find_story_by_topic(self, topic: str, topic_id: str = None,
+                            topic_emb: list = None,
+                            similarity_threshold: float = 0.72) -> dict:
+        """找同主题已存在的 story（P6 故事唯一化用）。
+
+        匹配优先级：
+        1. topic_id 完全相同（同任务下的故事）
+        2. tags 字段完全相同（同主题标签）
+        3. embedding 相似度 ≥ threshold（语义同主题）
+
+        threshold 默认 0.72——和碎片聚类阈值（STORY_CONSOLIDATION_THRESHOLD）
+        一致：碎片间 0.72 算同主题，story 间也用同标准判断"同主题"。
+
+        topic_emb 参数（推荐）：直接传入碎片组的 embedding 均值。
+        比用 topic 文本重新 embed 更准——因为 topic 通常是碎片前20字，
+        短文本和 story 长叙事文本的 embedding 相似度天然偏低。
+        用碎片组 embedding 均值匹配 story embedding，是同维度对同维度。
+
+        返回最相关的一条 story dict，没有则返回 None。
+        """
+        conn = self._conn()
+        try:
+            # 1. topic_id 精确匹配
+            if topic_id:
+                row = conn.execute(
+                    "SELECT * FROM memory_fragments WHERE layer='story' AND dirty=1 "
+                    "AND topic_id=? ORDER BY created_at DESC LIMIT 1",
+                    (topic_id,)
+                ).fetchone()
+                if row:
+                    return dict(row)
+
+            # 2. tags 精确匹配
+            if topic:
+                row = conn.execute(
+                    "SELECT * FROM memory_fragments WHERE layer='story' AND dirty=1 "
+                    "AND tags=? ORDER BY created_at DESC LIMIT 1",
+                    (topic,)
+                ).fetchone()
+                if row:
+                    return dict(row)
+
+            # 3. embedding 相似度匹配
+            # 优先用传入的 topic_emb（碎片组均值），否则用 topic 文本 embed
+            from .embedder import embed, cosine_sim
+            query_emb = topic_emb
+            if not query_emb and topic:
+                query_emb = embed(topic)
+            if query_emb:
+                rows = conn.execute(
+                    "SELECT * FROM memory_fragments WHERE layer='story' AND dirty=1 "
+                    "ORDER BY created_at DESC LIMIT 50"
+                ).fetchall()
+                best, best_sim = None, 0.0
+                for r in rows:
+                    try:
+                        emb = json.loads(r["embedding"])
+                        if not emb:
+                            continue
+                        sim = cosine_sim(query_emb, emb)
+                        if sim > best_sim:
+                            best_sim, best = sim, dict(r)
+                    except Exception:
+                        continue
+                if best and best_sim >= similarity_threshold:
+                    return best
+            return None
+        finally:
+            conn.close()
+
+    def update_story(self, story_id: int, text: str, source_ids: list,
+                     event_time: str = None, event_span: str = None,
+                     tags: str = None) -> bool:
+        """更新已有 story 的内容和素材来源（P6 故事唯一化用）。
+
+        同主题新碎片进来时，重新叙事后用这个方法更新 story：
+        - text/event_time/event_span/tags 更新为合并后的新值
+        - source_ids 追加新碎片 id（去重）
+        - 重新计算 embedding
+        - importance 微涨（持续积累的话题更重要）
+        """
+        from .embedder import embed
+        conn = self._conn()
+        try:
+            # 取现有 source_ids，追加新的
+            row = conn.execute(
+                "SELECT source_ids, importance FROM memory_fragments WHERE id=? AND layer='story'",
+                (story_id,)
+            ).fetchone()
+            if not row:
+                return False
+
+            existing_ids = []
+            try:
+                existing_ids = json.loads(row["source_ids"]) if row["source_ids"] else []
+            except Exception:
+                existing_ids = []
+            merged_ids = list(dict.fromkeys(existing_ids + source_ids))  # 去重保序
+
+            new_emb = embed(text)
+            emb_json = json.dumps(new_emb) if new_emb else "[]"
+            new_importance = min(10.0, (row["importance"] or 6.5) + 0.2)
+
+            conn.execute(
+                """UPDATE memory_fragments
+                   SET text=?, embedding=?, source_ids=?, event_time=?, event_span=?,
+                       tags=?, importance=?, last_recalled=?, recall_count=recall_count+1
+                   WHERE id=?""",
+                (text, emb_json, json.dumps(merged_ids), event_time, event_span,
+                 tags, new_importance, time.time(), story_id)
+            )
+            conn.commit()
+
+            # 同步 vec_index（先删后插）
+            if new_emb:
+                try:
+                    self.vec_index.delete(self._vec_table, story_id)
+                except Exception:
+                    pass
+                try:
+                    self.vec_index.insert(self._vec_table, story_id, new_emb)
+                except Exception as e:
+                    print(f"[memory] vec_index sync skipped on update: {e}")
+            return True
+        finally:
+            conn.close()
+
+    # ── 观察整合（吸取 hindsight consolidation） ────────────────
+
+    def find_similar_knowledge(self, text: str, threshold: float = 0.72,
+                               limit: int = 3) -> list:
+        """找与文本相似的 observation（knowledge 层）。
+
+        hindsight 的 consolidator 用向量检索候选观察，这里等价实现：
+        对 knowledge 层碎片做 cosine 相似度匹配，返回 ≥threshold 的观察。
+        """
+        from .embedder import embed
+        query_emb = embed(text)
+        if not query_emb:
+            return []
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM memory_fragments WHERE layer='knowledge' AND dirty=1 "
+                "ORDER BY created_at DESC LIMIT 100"
+            ).fetchall()
+            results = []
+            for r in rows:
+                try:
+                    emb = json.loads(r["embedding"]) if r["embedding"] else []
+                    if not emb:
+                        continue
+                    sim = cosine_sim(query_emb, emb)
+                    if sim >= threshold:
+                        results.append({
+                            "id": r["id"],
+                            "text": r["text"],
+                            "raw_count": r["raw_count"] or 1,
+                            "sim": round(sim, 4),
+                        })
+                except Exception:
+                    continue
+            results.sort(key=lambda x: -x["sim"])
+            return results[:limit]
+        finally:
+            conn.close()
+
+    def update_observation(self, obs_id: int, new_text: str,
+                           new_source_id: int = None) -> bool:
+        """更新观察内容并累加证据数（hindsight update 动作）。
+
+        更新前把旧文本归档到 memory_archive（可逆），
+        source_ids 追加新碎片 id，raw_count+1，重新算 embedding。
+        """
+        from .embedder import embed
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "SELECT text, source_ids, raw_count FROM memory_fragments "
+                "WHERE id=? AND layer='knowledge'",
+                (obs_id,)
+            ).fetchone()
+            if not row:
+                return False
+
+            # 旧文本进 archive（可逆兜底）
+            try:
+                conn.execute(
+                    "INSERT OR IGNORE INTO memory_archive (fragment_id, text, ts, source, archived_at) "
+                    "VALUES (?,?,?,?,?)",
+                    (obs_id, row["text"], time.strftime("%Y%m%d%H%M%S"),
+                     "observation_update", time.time())
+                )
+            except Exception:
+                pass
+
+            existing_ids = []
+            try:
+                existing_ids = json.loads(row["source_ids"]) if row["source_ids"] else []
+            except Exception:
+                existing_ids = []
+            if new_source_id:
+                existing_ids.append(new_source_id)
+            merged_ids = list(dict.fromkeys(existing_ids))
+
+            new_emb = embed(new_text)
+            emb_json = json.dumps(new_emb) if new_emb else "[]"
+            new_raw = (row["raw_count"] or 1) + 1
+
+            conn.execute(
+                """UPDATE memory_fragments
+                   SET text=?, embedding=?, source_ids=?, raw_count=?,
+                       importance=MIN(10.0, importance+0.1), last_recalled=?
+                   WHERE id=?""",
+                (new_text, emb_json, json.dumps(merged_ids), new_raw,
+                 time.time(), obs_id)
+            )
+            conn.commit()
+
+            # 同步 vec_index
+            if new_emb:
+                try:
+                    self.vec_index.delete(self._vec_table, obs_id)
+                except Exception:
+                    pass
+                try:
+                    self.vec_index.insert(self._vec_table, obs_id, new_emb)
+                except Exception:
+                    pass
+            return True
+        finally:
+            conn.close()
+
+    def bump_observation(self, obs_id: int, new_source_id: int = None) -> bool:
+        """观察证据数+1，不改变内容（hindsight merge 动作：重复碎片只加证据）。"""
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "SELECT source_ids FROM memory_fragments WHERE id=? AND layer='knowledge'",
+                (obs_id,)
+            ).fetchone()
+            if not row:
+                return False
+            existing_ids = []
+            try:
+                existing_ids = json.loads(row["source_ids"]) if row["source_ids"] else []
+            except Exception:
+                existing_ids = []
+            if new_source_id:
+                existing_ids.append(new_source_id)
+            merged_ids = list(dict.fromkeys(existing_ids))
+            conn.execute(
+                "UPDATE memory_fragments SET raw_count=raw_count+1, "
+                "source_ids=?, last_recalled=? WHERE id=?",
+                (json.dumps(merged_ids), time.time(), obs_id)
+            )
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+    def mark_contradiction(self, obs_id: int, fragment_id: int) -> bool:
+        """标记观察与碎片矛盾（hindsight contradict 动作）。
+
+        在 memory_links 建双向 contradicts 边：观察 ↔ 碎片都保留，
+        矛盾关系显性化，召回时双方都可见（不做删除裁决）。
+        """
+        conn = self._conn()
+        try:
+            conn.execute(
+                """INSERT OR IGNORE INTO memory_links
+                   (from_id, to_id, link_type, weight, created_at)
+                   VALUES (?,?,?,?,?)""",
+                (obs_id, fragment_id, "contradicts", 0.8, time.time())
+            )
+            conn.execute(
+                """INSERT OR IGNORE INTO memory_links
+                   (from_id, to_id, link_type, weight, created_at)
+                   VALUES (?,?,?,?,?)""",
+                (fragment_id, obs_id, "contradicts", 0.8, time.time())
+            )
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+    def link_stories(self, from_story_id: int, to_story_id: int,
+                     link_type: str = "next_in_topic", weight: float = 0.9) -> bool:
+        """在两条 story 之间建边（P6 故事网络用）。
+
+        link_type:
+        - next_in_topic: 同主题时间先后（前一条 → 后一条）
+        - similar_to: 跨主题语义相似
+        - cause: 跨主题因果（前一条导致后一条）
+        """
+        if from_story_id == to_story_id:
+            return False
+        conn = self._conn()
+        try:
+            conn.execute(
+                """INSERT OR IGNORE INTO memory_links
+                   (from_id, to_id, link_type, weight, created_at)
+                   VALUES (?,?,?,?,?)""",
+                (from_story_id, to_story_id, link_type, weight, time.time())
+            )
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+    def get_story_chain(self, topic_id: str = None, tags: str = None,
+                        limit: int = 20) -> list:
+        """取一个主题下的故事链（按 event_time 或 created_at 排序）。
+
+        用于 recall_by_topic 时返回同主题的故事序列，
+        AI 一次能拿到完整的项目经历线。
+        """
+        conn = self._conn()
+        try:
+            if topic_id:
+                rows = conn.execute(
+                    "SELECT * FROM memory_fragments WHERE layer='story' AND dirty=1 "
+                    "AND topic_id=? ORDER BY created_at ASC LIMIT ?",
+                    (topic_id, limit)
+                ).fetchall()
+            elif tags:
+                rows = conn.execute(
+                    "SELECT * FROM memory_fragments WHERE layer='story' AND dirty=1 "
+                    "AND tags=? ORDER BY created_at ASC LIMIT ?",
+                    (tags, limit)
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM memory_fragments WHERE layer='story' AND dirty=1 "
+                    "ORDER BY created_at ASC LIMIT ?",
+                    (limit,)
+                ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def get_unconsolidated_cores(self, min_group_size: int = 3,
+                                  limit: int = 100) -> list:
+        """获取未被 story 整理过的 core 碎片（P6 叙事沉淀用）。
+
+        返回 [{id, text, embedding, created_at, tags}]，按 created_at ASC。
+        """
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                """SELECT id, text, embedding, created_at, tags
+                   FROM memory_fragments
+                   WHERE layer='core' AND dirty=1
+                   AND crystal_parent_id IS NULL
+                   AND embedding IS NOT NULL AND embedding != '[]'
+                   ORDER BY created_at ASC LIMIT ?""",
+                (limit,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def count_unconsolidated_cores(self) -> int:
+        """待叙事整理的 core 碎片数（轻量触发用，只 COUNT 不取数据，2026-08-30）。"""
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM memory_fragments "
+                "WHERE layer='core' AND dirty=1 AND crystal_parent_id IS NULL "
+                "AND embedding IS NOT NULL AND embedding != '[]'"
+            ).fetchone()
+            return row[0] if row else 0
+        finally:
+            conn.close()
+
+    def get_by_hash(self, content_hash: str) -> list:
+        """按 summary_hash 查自传晶体（hash 寻址，P3）。"""
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM memory_fragments WHERE summary_hash=? ORDER BY created_at DESC",
+                (content_hash,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def forget(self, fragment_id):
+        return self.delete(fragment_id)
+
+    def edit(self, fragment_id, text=None, tags=None):
+        conn = self._conn()
+        try:
+            updates = []
+            vals = []
+            if text is not None:
+                updates.append("text=?")
+                vals.append(text)
+                new_emb = embed(text)
+                if new_emb:
+                    updates.append("embedding=?")
+                    vals.append(json.dumps(new_emb))
+            if tags is not None:
+                updates.append("tags=?")
+                vals.append(tags)
+            if not updates:
+                return False
+            vals.append(fragment_id)
+            conn.execute(
+                f"UPDATE memory_fragments SET {', '.join(updates)} WHERE id=?",
+                vals
+            )
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+    # ── Stats & listing ─────────────────────────────
+
+    def stats(self):
+        conn = self._conn()
+        try:
+            total = conn.execute("SELECT COUNT(*) as c FROM memory_fragments WHERE dirty=1").fetchone()["c"]
+            core = conn.execute("SELECT COUNT(*) as c FROM memory_fragments WHERE dirty=1 AND layer='core'").fetchone()["c"]
+            archival = conn.execute("SELECT COUNT(*) as c FROM memory_fragments WHERE dirty=1 AND layer='archival'").fetchone()["c"]
+            archive_total = conn.execute("SELECT COUNT(*) as c FROM memory_archive").fetchone()["c"]
+            avg_w = conn.execute("SELECT AVG(weight) as a FROM memory_fragments WHERE dirty=1 AND layer='core'").fetchone()["a"] or 0
+            max_w = conn.execute("SELECT MAX(weight) as a FROM memory_fragments WHERE dirty=1 AND layer='core'").fetchone()["a"] or 0
+            recent = conn.execute(
+                "SELECT COUNT(*) as c FROM memory_fragments WHERE dirty=1 AND created_at > ?",
+                (time.time() - 86400,)
+            ).fetchone()["c"]
+            return {
+                "total_fragments": total,
+                "core": core,
+                "archival": archival,
+                "archive_table": archive_total,
+                "avg_weight_core": round(avg_w, 2),
+                "max_weight_core": round(max_w, 2),
+                "recent_24h": recent,
+            }
+        finally:
+            conn.close()
+
+    def list_all(self, limit=50, offset=0):
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM memory_fragments WHERE dirty=1 ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (limit, offset)
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def search_by_text(self, keyword, limit=10, include_archived=False):
+        conn = self._conn()
+        try:
+            dirty_clause = "" if include_archived else "dirty=1 AND "
+            rows = conn.execute(
+                f"SELECT * FROM memory_fragments "
+                f"WHERE {dirty_clause}text LIKE ? ORDER BY weight DESC, created_at DESC LIMIT ?",
+                (f"%{keyword}%", limit)
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def get_chain(self, fragment_id, include_archived=False):
+        conn = self._conn()
+        try:
+            dirty_clause = "AND dirty=1" if not include_archived else ""
+            root_id = fragment_id
+            while True:
+                row = conn.execute(
+                    f"SELECT parent_id FROM memory_fragments WHERE id=? {dirty_clause}", (root_id,)
+                ).fetchone()
+                if not row or not row["parent_id"]:
+                    break
+                root_id = row["parent_id"]
+            chain = []
+            frontier = [root_id]
+            seen = set()
+            while frontier:
+                fid = frontier.pop(0)
+                if fid in seen:
+                    continue
+                seen.add(fid)
+                row = conn.execute(
+                    f"SELECT * FROM memory_fragments WHERE id=? {dirty_clause}", (fid,)
+                ).fetchone()
+                if row:
+                    chain.append(dict(row))
+                    children = conn.execute(
+                        f"SELECT id FROM memory_fragments WHERE parent_id=? {dirty_clause}", (fid,)
+                    ).fetchall()
+                    for c in children:
+                        frontier.append(c["id"])
+            chain.sort(key=lambda f: f.get("ts", ""))
+            return chain
+        finally:
+            conn.close()
+
+    def get_all(self, limit=200):
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT * FROM memory_fragments WHERE dirty=1 ORDER BY ts DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def get_graph(self, limit=100):
+        conn = self._conn()
+        try:
+            nodes = conn.execute(
+                "SELECT id, text, ts, weight, source, importance, layer, epistemic "
+                "FROM memory_fragments WHERE dirty=1 ORDER BY created_at DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+            edges = conn.execute(
+                """SELECT from_id, to_id, link_type, weight FROM memory_links
+                   WHERE from_id IN (SELECT id FROM memory_fragments WHERE dirty=1 ORDER BY created_at DESC LIMIT ?)
+                   AND to_id IN (SELECT id FROM memory_fragments WHERE dirty=1 ORDER BY created_at DESC LIMIT ?)""",
+                (limit, limit)
+            ).fetchall()
+            return {
+                "nodes": [dict(n) for n in nodes],
+                "edges": [dict(e) for e in edges],
+            }
+        finally:
+            conn.close()
+
+    def get_task_roots(self, topic_id, limit=5):
+        conn = self._conn()
+        try:
+            rows = conn.execute(
+                "SELECT id, text, ts, topic_id, source FROM memory_fragments "
+                "WHERE topic_id=? AND source='task_root' AND dirty=1 "
+                "ORDER BY created_at DESC LIMIT ?",
+                (topic_id, limit)
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+    def delete(self, fragment_id):
+        conn = self._conn()
+        try:
+            conn.execute("UPDATE memory_fragments SET dirty=0 WHERE id=?", (fragment_id,))
+            # 单条删除同样要摘掉连到它的边：留着指向已删 id 的关系，反射回路会顺着边
+            # 把"邻居"找出来，再按 id 取正文时读到的是软删行（与 delete_all 那次同型）。
+            for sql in ("DELETE FROM memory_links WHERE from_id=? OR to_id=?",
+                        "DELETE FROM memory_relations WHERE subject_id=? OR object_id=?"):
+                try:
+                    conn.execute(sql, (fragment_id, fragment_id))
+                except Exception:
+                    pass
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+    def delete_all(self):
+        """清空记忆：碎片软删，连线/关系硬删。
+
+        只把 fragments 置 dirty=0 是不够的 —— 反射回路会顺着 memory_relations 的 weak_assoc
+        边找连通分量，再按 id 取正文；那些行虽然 dirty=0 但仍查得到，于是"刚清空的库"照样能
+        涌现元晶、回填观察（实测清空后跑一次反思产出 5 个元晶 + 3 条观察）。
+        """
+        conn = self._conn()
+        try:
+            conn.execute("UPDATE memory_fragments SET dirty=0")
+            # 实体索引也是从碎片长出来的：留着历史 mention_count 会让"清空后"的
+            # detect_gaps 继续报 8 个知识缺口（实测），所以一并清掉。
+            for t in ("memory_links", "memory_relations", "memory_entities", "memory_summary_nodes"):
+                try:
+                    conn.execute(f"DELETE FROM {t}")
+                except Exception:
+                    pass
+            conn.commit()
+            return True
+        finally:
+            conn.close()
+
+
+# ── Helper ──────────────────────────────────────────
+
+def _add_col_if_missing(conn, table, col, col_def):
+    """Add a column if it doesn't already exist."""
+    try:
+        conn.execute(f"SELECT {col} FROM {table} LIMIT 0")
+    except sqlite3.OperationalError:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_def}")
+
+
+# ── Singleton ──────────────────────────────────────
+_store = None
+
+
+def get_store():
+    global _store
+    if _store is None:
+        _store = FragmentStore()
+    return _store

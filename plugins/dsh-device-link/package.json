@@ -1,0 +1,50 @@
+{
+  "name": "@local/dsh-device-link",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "设备互联：在 DSH 设置页配置互联服务，并把插件、技能、规则、配置、会话一键同步到另一台电脑",
+  "keywords": ["dsh", "plugin", "sync", "device-link", "lan"],
+  "license": "MIT",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./host/*": "./host/*",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "host",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "SECURITY.md",
+    "CHANGELOG.md",
+    "docs",
+    "scripts",
+    "test"
+  ],
+  "scripts": {
+    "test": "node test/run-all.mjs",
+    "test:client": "node test/client-smoke.mjs",
+    "test:e2e": "node test/e2e.mjs",
+    "install-plugin": "node scripts/install.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["@deepseek-ai/dsh-client-ui-settings", "@deepseek-ai/dsh-client-locale"]
+    }
+  }
+}
